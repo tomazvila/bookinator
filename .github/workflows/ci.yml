@@ -48,7 +48,7 @@ jobs:
       - name: Import image into k3s
         run: |
           k3s ctr images rm docker.io/library/books-web:latest 2>/dev/null || true
-          k3s ctr images import ./result
+          k3s ctr images import --no-unpack ./result
 
       - name: Restart deployment
         run: |
