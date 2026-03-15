@@ -270,6 +270,7 @@ main {
     padding: 0.2rem 0.6rem;
     font-size: 0.75rem;
     cursor: default;
+    white-space: nowrap;
 }
 
 /* Stats */
