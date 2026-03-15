@@ -41,6 +41,9 @@ jobs:
       - name: Build Docker image
         run: docker build -t books-web:latest .
 
+      - name: Import image into k3s
+        run: docker save books-web:latest | sudo /run/current-system/sw/bin/k3s ctr images import -
+
       - name: Restart deployment
         run: /run/current-system/sw/bin/kubectl --kubeconfig /home/ghrunner/.kube/config rollout restart deployment/books-web
 
