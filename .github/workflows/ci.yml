@@ -46,12 +46,10 @@ jobs:
 
       - name: Import image into k3s
         run: |
-          rm -f /var/lib/rancher/k3s/agent/images/books-web.tar.gz
-          cp ./result /var/lib/rancher/k3s/agent/images/books-web.tar.gz
-          sleep 5
+          k3s ctr images rm docker.io/library/books-web:latest 2>/dev/null || true
+          k3s ctr images import ./result
 
       - name: Restart deployment
-        run: kubectl rollout restart deployment/books-web
-
-      - name: Wait for rollout
-        run: kubectl rollout status deployment/books-web --timeout=120s
+        run: |
+          kubectl rollout restart deployment/books-web
+          kubectl rollout status deployment/books-web --timeout=120s
