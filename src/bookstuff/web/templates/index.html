@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="search-container">
+    <input type="text" id="search" placeholder="Search books..." autocomplete="off" autofocus>
+    <div id="categories" class="categories"></div>
+</div>
+
+<div id="stats" class="stats"></div>
+<div id="results" class="results"></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const searchInput = document.getElementById('search');
+const categoriesEl = document.getElementById('categories');
+const resultsEl = document.getElementById('results');
+const statsEl = document.getElementById('stats');
+let activeCategory = null;
+let debounceTimer = null;
+
+function formatSize(bytes) {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / 1048576).toFixed(1) + ' MB';
+}
+
+function extClass(ext) {
+    const map = {pdf: 'ext-pdf', epub: 'ext-epub', mobi: 'ext-mobi', djvu: 'ext-djvu', azw3: 'ext-azw3', cbz: 'ext-cbz'};
+    return map[ext] || '';
+}
+
+async function loadCategories() {
+    const resp = await fetch('/api/categories');
+    const data = await resp.json();
+    let html = '<button class="chip active" data-cat="">All</button>';
+    for (const cat of data.categories) {
+        html += `<button class="chip" data-cat="${cat.category}">${cat.category} <span class="count">${cat.count}</span></button>`;
+    }
+    categoriesEl.innerHTML = html;
+    categoriesEl.querySelectorAll('.chip').forEach(btn => {
+        btn.addEventListener('click', () => {
+            categoriesEl.querySelectorAll('.chip').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            activeCategory = btn.dataset.cat || null;
+            doSearch();
+        });
+    });
+}
+
+async function doSearch() {
+    const q = searchInput.value.trim();
+    const params = new URLSearchParams({q, limit: '100'});
+    if (activeCategory) params.set('category', activeCategory);
+    const resp = await fetch('/api/search?' + params);
+    const data = await resp.json();
+    renderResults(data.results, data.count);
+}
+
+function renderResults(books, count) {
+    statsEl.textContent = count + (count === 1 ? ' book' : ' books') + (count >= 100 ? '+' : '');
+    if (!books.length) {
+        resultsEl.innerHTML = '<p class="empty">No books found.</p>';
+        return;
+    }
+    let html = '<table><thead><tr><th>Title</th><th>Author</th><th>Category</th><th>Type</th><th>Size</th><th></th></tr></thead><tbody>';
+    for (const b of books) {
+        html += `<tr class="clickable-row" onclick="window.location='/book/${b.id}'">
+            <td class="title-cell">${esc(b.title)}</td>
+            <td>${esc(b.author)}</td>
+            <td><span class="chip small">${esc(b.category)}</span></td>
+            <td><span class="ext ${extClass(b.extension)}">${b.extension}</span></td>
+            <td class="size">${formatSize(b.size_bytes)}</td>
+            <td><a href="/download/${encodeURIComponent(b.category)}/${encodeURIComponent(b.filename)}" class="dl-btn" onclick="event.stopPropagation()">Download</a></td>
+        </tr>`;
+    }
+    html += '</tbody></table>';
+    resultsEl.innerHTML = html;
+}
+
+function esc(s) {
+    const d = document.createElement('div');
+    d.textContent = s;
+    return d.innerHTML;
+}
+
+searchInput.addEventListener('input', () => {
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(doSearch, 200);
+});
+
+loadCategories();
+doSearch();
+</script>
+{% endblock %}

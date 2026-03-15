@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Nix
+result
+result-*
+
+# Environment
+.env
+key.txt
+
+# IDE
+.vscode/
+.idea/
+
+# Test / Cache
+.pytest_cache/
+.mypy_cache/
+
+# Large/generated files
+manifest.json
+plan.json
+
+# Playwright MCP
+.playwright-mcp/
+
+# Claude
+.claude/
+
+# OS
+.DS_Store
+
+# EBooks directory (local test data)
+EBooks/
+
+# Screenshots
+*.png

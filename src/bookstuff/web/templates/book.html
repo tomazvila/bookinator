@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+
+{% block title %}{{ book.title }}{% endblock %}
+
+{% block content %}
+<a href="/" class="back-link">&larr; Back to search</a>
+
+<div class="book-detail">
+    <div class="book-preview" id="preview">
+        <span class="no-preview">Loading...</span>
+    </div>
+    <div class="book-info">
+        <h1>{{ book.title }}</h1>
+        <div class="author">{{ book.author }}</div>
+        <div class="book-meta">
+            <div class="book-meta-row">
+                <span class="label">Category</span>
+                <span class="value"><span class="chip small">{{ book.category }}</span></span>
+            </div>
+            <div class="book-meta-row">
+                <span class="label">Format</span>
+                <span class="value"><span class="ext {{ 'ext-' + book.extension }}">{{ book.extension }}</span></span>
+            </div>
+            <div class="book-meta-row">
+                <span class="label">Size</span>
+                <span class="value" id="size">{{ book.size_bytes }} bytes</span>
+            </div>
+            <div class="book-meta-row">
+                <span class="label">File</span>
+                <span class="value">{{ book.filename }}</span>
+            </div>
+        </div>
+        <a href="/download/{{ book.category | urlencode }}/{{ book.filename | urlencode }}" class="dl-btn">Download</a>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function() {
+    const sizeEl = document.getElementById('size');
+    const bytes = {{ book.size_bytes }};
+    if (bytes < 1024) sizeEl.textContent = bytes + ' B';
+    else if (bytes < 1048576) sizeEl.textContent = (bytes / 1024).toFixed(1) + ' KB';
+    else sizeEl.textContent = (bytes / 1048576).toFixed(1) + ' MB';
+
+    const preview = document.getElementById('preview');
+    const img = new Image();
+    img.onload = function() { preview.innerHTML = ''; preview.appendChild(img); };
+    img.onerror = function() { preview.innerHTML = '<span class="no-preview">No preview available</span>'; };
+    img.src = '/api/preview/{{ book.id }}';
+})();
+</script>
+{% endblock %}
