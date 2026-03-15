@@ -68,9 +68,23 @@
             ExposedPorts = { "5001/tcp" = {}; };
           };
         };
+        devServer = pkgs.writeShellScriptBin "bookstuff-dev" ''
+          export PYTHONPATH="${self}/src:$PYTHONPATH"
+          export BOOKS_DIR="''${BOOKS_DIR:-/tmp/books-local}"
+          export PORT="''${PORT:-5001}"
+          echo "Starting dev server on http://localhost:$PORT (BOOKS_DIR=$BOOKS_DIR)"
+          exec ${python.withPackages (ps: [
+            ps.click ps.anthropic ps.ebooklib ps.pymupdf ps.flask
+          ])}/bin/python -m bookstuff.web.app
+        '';
       in {
         packages.default = bookstuff;
         packages.docker = dockerImage;
+        packages.dev = devServer;
+        apps.dev = {
+          type = "app";
+          program = "${devServer}/bin/bookstuff-dev";
+        };
         devShells.default = devShell;
       }
     );

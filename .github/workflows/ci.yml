@@ -30,3 +30,19 @@ jobs:
 
       - name: Nix flake check
         run: nix flake check
+
+  deploy:
+    runs-on: self-hosted
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build Docker image
+        run: docker build -t books-web:latest .
+
+      - name: Restart deployment
+        run: kubectl rollout restart deployment/books-web
+
+      - name: Wait for rollout
+        run: kubectl rollout status deployment/books-web --timeout=120s

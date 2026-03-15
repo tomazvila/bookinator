@@ -22,7 +22,7 @@ bookstuff-web = "bookstuff.web.app:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-"bookstuff.web" = ["templates/*.html", "static/*.css"]
+"bookstuff.web" = ["templates/*.html", "static/*.css", "static/*.png"]
 
 [tool.pytest.ini_options]
 markers = [
