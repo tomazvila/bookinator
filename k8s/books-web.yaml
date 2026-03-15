@@ -24,6 +24,7 @@ spec:
           imagePullPolicy: Never
           ports:
             - containerPort: 5001
+              hostPort: 5001
               name: http
           env:
             - name: BOOKS_DIR
