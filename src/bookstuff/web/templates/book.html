@@ -3,11 +3,11 @@
 {% block title %}{{ book.title }}{% endblock %}
 
 {% block content %}
-<a href="/" class="back-link">&larr; Back to search</a>
+<a href="/" class="back-link"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" style="vertical-align:-2px;margin-right:4px"><path d="M9 2L4 7l5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>Back to search</a>
 
 <div class="book-detail">
     <div class="book-preview" id="preview">
-        <span class="no-preview">Loading...</span>
+        <div class="skeleton"></div>
     </div>
     <div class="book-info">
         <h1>{{ book.title }}</h1>
@@ -30,7 +30,7 @@
                 <span class="value">{{ book.filename }}</span>
             </div>
         </div>
-        <a href="/download/{{ book.category | urlencode }}/{{ book.filename | urlencode }}" class="dl-btn">Download</a>
+        <a href="/download/{{ book.category | urlencode }}/{{ book.filename | urlencode }}" class="dl-btn-lg" id="dl-btn">Download</a>
     </div>
 </div>
 {% endblock %}
@@ -39,16 +39,31 @@
 <script>
 (function() {
     const sizeEl = document.getElementById('size');
+    const dlBtn = document.getElementById('dl-btn');
     const bytes = {{ book.size_bytes }};
-    if (bytes < 1024) sizeEl.textContent = bytes + ' B';
-    else if (bytes < 1048576) sizeEl.textContent = (bytes / 1024).toFixed(1) + ' KB';
-    else sizeEl.textContent = (bytes / 1048576).toFixed(1) + ' MB';
+    let sizeStr;
+    if (bytes < 1024) sizeStr = bytes + ' B';
+    else if (bytes < 1048576) sizeStr = (bytes / 1024).toFixed(1) + ' KB';
+    else sizeStr = (bytes / 1048576).toFixed(1) + ' MB';
+    sizeEl.textContent = sizeStr;
+    dlBtn.textContent = 'Download (' + sizeStr + ')';
 
     const preview = document.getElementById('preview');
     const img = new Image();
     img.onload = function() { preview.innerHTML = ''; preview.appendChild(img); };
     img.onerror = function() { preview.innerHTML = '<span class="no-preview">No preview available</span>'; };
     img.src = '/api/preview/{{ book.id }}';
+
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape' || e.key === 'Backspace') {
+            if (document.activeElement.tagName !== 'INPUT') {
+                window.location = '/';
+            }
+        } else if (e.key === 'd' && document.activeElement.tagName !== 'INPUT') {
+            e.preventDefault();
+            dlBtn.click();
+        }
+    });
 })();
 </script>
 {% endblock %}

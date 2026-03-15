@@ -1,11 +1,14 @@
 """Flask web application for browsing and searching the book collection."""
 
+import hashlib
+import hmac
 import logging
 import os
 
 from flask import Flask, jsonify, render_template, request, send_from_directory, abort
+from werkzeug.utils import secure_filename
 
-from bookstuff.web.index import get_db_path, init_db, reindex, search, get_categories, start_reindex_thread
+from bookstuff.web.index import get_db_path, init_db, reindex, search, get_categories, start_reindex_thread, EBOOK_EXTENSIONS, parse_filename
 from bookstuff.web.preview import generate_preview
 
 logger = logging.getLogger(__name__)
@@ -17,6 +20,7 @@ def create_app(books_dir: str | None = None, reindex_on_start: bool = True) -> F
 
     app = Flask(__name__)
     app.config["BOOKS_DIR"] = books_dir
+    app.config["UPLOAD_PASSWORD"] = os.environ.get("UPLOAD_PASSWORD", "AfAA7B63218")
 
     db_path = get_db_path(books_dir)
     conn = init_db(db_path)
@@ -76,6 +80,59 @@ def create_app(books_dir: str | None = None, reindex_on_start: bool = True) -> F
         if not os.path.isdir(directory):
             abort(404)
         return send_from_directory(directory, filename, as_attachment=True)
+
+    @app.route("/api/upload", methods=["POST"])
+    def api_upload():
+        password = request.form.get("password", "")
+        if not hmac.compare_digest(password, app.config["UPLOAD_PASSWORD"]):
+            return jsonify({"error": "Invalid password"}), 401
+
+        file = request.files.get("file")
+        if not file or not file.filename:
+            return jsonify({"error": "No file provided"}), 400
+
+        filename = secure_filename(file.filename)
+        if not filename:
+            return jsonify({"error": "Invalid filename"}), 400
+
+        ext = os.path.splitext(filename)[1].lower()
+        if ext not in EBOOK_EXTENSIONS:
+            allowed = ", ".join(sorted(EBOOK_EXTENSIONS))
+            return jsonify({"error": f"Unsupported format. Allowed: {allowed}"}), 400
+
+        category = request.form.get("category", "uncategorized").strip()
+        if not category:
+            category = "uncategorized"
+
+        category_dir = os.path.join(books_dir, category)
+        os.makedirs(category_dir, exist_ok=True)
+
+        dest = os.path.join(category_dir, filename)
+        if os.path.exists(dest):
+            return jsonify({"error": "A file with this name already exists in this category"}), 409
+
+        file.save(dest)
+        logger.info("Uploaded %s to %s", filename, category)
+
+        # Add to index immediately
+        author, title = parse_filename(filename)
+        rel_path = os.path.join(category, filename)
+        size_bytes = os.path.getsize(dest)
+        conn.execute(
+            """INSERT OR IGNORE INTO books
+               (filename, author, title, category, extension, size_bytes, path)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (filename, author, title, category, ext.lstrip("."), size_bytes, rel_path),
+        )
+        conn.commit()
+
+        book_id = conn.execute("SELECT id FROM books WHERE path = ?", (rel_path,)).fetchone()
+        return jsonify({
+            "ok": True,
+            "id": book_id["id"] if book_id else None,
+            "filename": filename,
+            "category": category,
+        }), 201
 
     return app
 

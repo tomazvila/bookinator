@@ -41,3 +41,4 @@ EBooks/
 
 # Screenshots
 *.png
+!src/bookstuff/web/static/background.png

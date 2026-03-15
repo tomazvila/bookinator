@@ -89,3 +89,26 @@ Books are classified into: `programming`, `computer-science`, `mathematics`, `ph
 - Host: `lilvilla@ssh.tomazvi.la` (SSH key auth)
 - Destination: `/mnt/ssdb/books/<category>/`
 - Existing collections to reorganize: `/mnt/ssdb/AK/`, `/mnt/ssdb/financial knowloedge/`
+
+## Design Context
+
+### Users
+Personal tool for a single developer managing a large e-book collection. Used when searching for a specific book to read or reference — efficiency matters more than exploration. Accessed via `books.tomazvi.la` on local network.
+
+### Brand Personality
+**Bold, modern, sharp.** The interface should feel like a precision tool — confident and direct, not decorative. Think Notion or Obsidian: structured, clean, keyboard-friendly.
+
+### Aesthetic Direction
+- **Theme**: Tokyo Night dark palette (already established in `style.css`)
+- **Typography**: Inter, clean hierarchy, no ornamental type
+- **Layout**: Dense but breathable — maximize information density without clutter
+- **References**: Notion, Obsidian — knowledge management tools with crisp edges and structured layouts
+- **Anti-references**: Goodreads (too social/cluttered), Calibre (too utilitarian/dated)
+- **Mode**: Dark only — no light mode needed
+
+### Design Principles
+1. **Speed over spectacle** — The interface exists to find and download books fast. Every element should reduce time-to-book.
+2. **Structure is the aesthetic** — Well-organized information IS the design. Categories, metadata, and search results should feel satisfying through clarity alone.
+3. **Sharp, not soft** — Prefer crisp edges, strong contrast, and decisive spacing over rounded, gentle, or playful treatments.
+4. **No decoration without function** — Every visual element must earn its place. Color-coded extension badges work because they convey information at a glance.
+5. **Keyboard-first interactions** — Design for someone who reaches for `/` before the mouse.

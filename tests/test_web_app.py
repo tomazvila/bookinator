@@ -1,5 +1,6 @@
 """Tests for the Flask web application."""
 
+import io
 import json
 
 import pytest
@@ -105,3 +106,65 @@ class TestDownload:
     def test_download_nonexistent_file(self, client):
         resp = client.get("/download/fiction/nonexistent.pdf")
         assert resp.status_code == 404
+
+
+class TestUpload:
+    PASSWORD = "AfAA7B63218"
+
+    def _upload(self, client, filename="Test - Book.pdf", content=b"fakepdf",
+                category="programming", password=None):
+        if password is None:
+            password = self.PASSWORD
+        data = {
+            "file": (io.BytesIO(content), filename),
+            "category": category,
+            "password": password,
+        }
+        return client.post("/api/upload", data=data, content_type="multipart/form-data")
+
+    def test_upload_success(self, client, books_dir):
+        resp = self._upload(client)
+        assert resp.status_code == 201
+        data = json.loads(resp.data)
+        assert data["ok"] is True
+        assert data["filename"] == "Test_-_Book.pdf"
+        assert data["category"] == "programming"
+        assert (books_dir / "programming" / "Test_-_Book.pdf").exists()
+
+    def test_upload_wrong_password(self, client):
+        resp = self._upload(client, password="wrong")
+        assert resp.status_code == 401
+        data = json.loads(resp.data)
+        assert "password" in data["error"].lower() or "Invalid" in data["error"]
+
+    def test_upload_no_password(self, client):
+        resp = self._upload(client, password="")
+        assert resp.status_code == 401
+
+    def test_upload_no_file(self, client):
+        resp = client.post("/api/upload", data={"password": self.PASSWORD},
+                           content_type="multipart/form-data")
+        assert resp.status_code == 400
+
+    def test_upload_unsupported_format(self, client):
+        resp = self._upload(client, filename="notes.txt")
+        assert resp.status_code == 400
+        data = json.loads(resp.data)
+        assert "Unsupported" in data["error"]
+
+    def test_upload_duplicate_rejected(self, client):
+        self._upload(client, filename="Dup - Book.epub", content=b"epub1")
+        resp = self._upload(client, filename="Dup - Book.epub", content=b"epub2")
+        assert resp.status_code == 409
+
+    def test_upload_creates_category_dir(self, client, books_dir):
+        resp = self._upload(client, category="philosophy")
+        assert resp.status_code == 201
+        assert (books_dir / "philosophy").is_dir()
+
+    def test_upload_indexed_immediately(self, client):
+        self._upload(client, filename="New - Upload.pdf")
+        resp = client.get("/api/search?q=Upload")
+        data = json.loads(resp.data)
+        assert data["count"] == 1
+        assert "Upload" in data["results"][0]["title"]
