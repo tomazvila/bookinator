@@ -35,6 +35,9 @@ jobs:
     runs-on: self-hosted
     needs: build
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    env:
+      PATH: /run/wrappers/bin:/run/current-system/sw/bin:/usr/bin:/bin
+      KUBECONFIG: /home/ghrunner/.kube/config
     steps:
       - uses: actions/checkout@v5
 
@@ -42,10 +45,10 @@ jobs:
         run: docker build -t books-web:latest .
 
       - name: Import image into k3s
-        run: docker save books-web:latest | sudo /run/current-system/sw/bin/k3s ctr images import -
+        run: docker save books-web:latest | sudo k3s ctr images import -
 
       - name: Restart deployment
-        run: /run/current-system/sw/bin/kubectl --kubeconfig /home/ghrunner/.kube/config rollout restart deployment/books-web
+        run: kubectl rollout restart deployment/books-web
 
       - name: Wait for rollout
-        run: /run/current-system/sw/bin/kubectl --kubeconfig /home/ghrunner/.kube/config rollout status deployment/books-web --timeout=120s
+        run: kubectl rollout status deployment/books-web --timeout=120s
