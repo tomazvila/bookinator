@@ -10,7 +10,7 @@ jobs:
   test:
     runs-on: self-hosted
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Run tests
         run: |
@@ -23,7 +23,7 @@ jobs:
     runs-on: self-hosted
     needs: test
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Nix build
         run: nix build
