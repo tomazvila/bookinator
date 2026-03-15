@@ -42,7 +42,7 @@ jobs:
         run: docker build -t books-web:latest .
 
       - name: Restart deployment
-        run: /run/current-system/sw/bin/kubectl rollout restart deployment/books-web
+        run: /run/current-system/sw/bin/kubectl --kubeconfig /home/ghrunner/.kube/config rollout restart deployment/books-web
 
       - name: Wait for rollout
-        run: /run/current-system/sw/bin/kubectl rollout status deployment/books-web --timeout=120s
+        run: /run/current-system/sw/bin/kubectl --kubeconfig /home/ghrunner/.kube/config rollout status deployment/books-web --timeout=120s
