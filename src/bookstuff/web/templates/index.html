@@ -262,8 +262,11 @@ uploadForm.addEventListener('submit', async e => {
 
     try {
         const resp = await fetch('/api/upload', {method: 'POST', body: fd});
-        const data = await resp.json();
-        if (resp.ok) {
+        if (resp.status === 413) {
+            const sizeMB = (file.size / 1048576).toFixed(0);
+            showUploadStatus('File too large (' + sizeMB + ' MB) — max 100 MB via browser. Use rsync instead.', true);
+        } else if (resp.ok) {
+            const data = await resp.json();
             showUploadStatus('Uploaded ' + esc(data.filename) + ' to ' + humanize(data.category), false);
             uploadForm.reset();
             dropzoneText.textContent = 'Choose file or drag & drop';
@@ -271,10 +274,12 @@ uploadForm.addEventListener('submit', async e => {
             loadCategories();
             doSearch();
         } else {
-            showUploadStatus(data.error || 'Upload failed', true);
+            let msg = 'Upload failed (HTTP ' + resp.status + ')';
+            try { const data = await resp.json(); msg = data.error || msg; } catch {}
+            showUploadStatus(msg, true);
         }
     } catch (err) {
-        showUploadStatus('Network error', true);
+        showUploadStatus('Upload failed — check connection and try again', true);
     }
     uploadSubmit.disabled = false;
     uploadSubmit.textContent = 'Upload';
