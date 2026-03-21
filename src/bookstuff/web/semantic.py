@@ -462,6 +462,22 @@ def index_pending_books(
     if not is_semantic_available(conn):
         return 0
 
+    # Recover books stuck in 'processing' from a previous crash/OOM kill
+    stuck = conn.execute(
+        "UPDATE embedding_status SET status = 'pending' WHERE status = 'processing'"
+    ).rowcount
+    if stuck:
+        logger.info("Reset %d books stuck in 'processing' back to 'pending'", stuck)
+
+    # Clean orphaned embeddings left by incomplete indexing runs
+    orphaned = conn.execute(
+        "DELETE FROM chunk_embeddings WHERE chunk_id NOT IN (SELECT id FROM book_chunks)"
+    ).rowcount
+    if orphaned:
+        logger.info("Cleaned %d orphaned chunk embeddings", orphaned)
+
+    conn.commit()
+
     # Ensure all books have an embedding_status row
     conn.execute("""
         INSERT OR IGNORE INTO embedding_status (book_id, status)
