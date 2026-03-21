@@ -2,6 +2,8 @@
 
 import logging
 import os
+import time
+from collections import defaultdict
 
 from flask import Flask, jsonify, render_template, request, send_from_directory, abort
 from werkzeug.utils import secure_filename
@@ -12,6 +14,27 @@ from bookstuff.web.preview import generate_preview
 
 logger = logging.getLogger(__name__)
 
+MAX_FAILED_ATTEMPTS = 5
+LOCKOUT_WINDOW = 300  # seconds
+
+
+class _RateLimiter:
+    """IP-based rate limiter tracking failed password attempts."""
+
+    def __init__(self, max_attempts: int = MAX_FAILED_ATTEMPTS,
+                 window: int = LOCKOUT_WINDOW):
+        self.max_attempts = max_attempts
+        self.window = window
+        self._failures: dict[str, list[float]] = defaultdict(list)
+
+    def is_blocked(self, ip: str) -> bool:
+        now = time.monotonic()
+        self._failures[ip] = [t for t in self._failures[ip] if now - t < self.window]
+        return len(self._failures[ip]) >= self.max_attempts
+
+    def record_failure(self, ip: str) -> None:
+        self._failures[ip].append(time.monotonic())
+
 
 def create_app(books_dir: str | None = None, reindex_on_start: bool = True) -> Flask:
     """Create and configure the Flask application."""
@@ -21,6 +44,8 @@ def create_app(books_dir: str | None = None, reindex_on_start: bool = True) -> F
     app.config["BOOKS_DIR"] = books_dir
     app.config["UPLOAD_PASSWORD_HASH"] = os.environ.get("UPLOAD_PASSWORD_HASH", "")
     app.config["UPLOAD_PEPPER"] = os.environ.get("UPLOAD_PEPPER", "")
+
+    upload_limiter = _RateLimiter()
 
     db_path = get_db_path(books_dir)
     conn = init_db(db_path)
@@ -83,9 +108,14 @@ def create_app(books_dir: str | None = None, reindex_on_start: bool = True) -> F
 
     @app.route("/api/upload", methods=["POST"])
     def api_upload():
+        client_ip = request.headers.get("CF-Connecting-IP") or request.remote_addr
+        if upload_limiter.is_blocked(client_ip):
+            return jsonify({"error": "Too many attempts, try again later"}), 429
+
         password = request.form.get("password", "")
         if not verify_password(password, app.config["UPLOAD_PASSWORD_HASH"],
                                app.config["UPLOAD_PEPPER"]):
+            upload_limiter.record_failure(client_ip)
             return jsonify({"error": "Invalid password"}), 401
 
         file = request.files.get("file")

@@ -173,3 +173,18 @@ class TestUpload:
         data = json.loads(resp.data)
         assert data["count"] == 1
         assert "Upload" in data["results"][0]["title"]
+
+    def test_rate_limit_after_failed_attempts(self, client):
+        for _ in range(5):
+            resp = self._upload(client, password="wrong")
+            assert resp.status_code == 401
+        resp = self._upload(client, password="wrong")
+        assert resp.status_code == 429
+        data = json.loads(resp.data)
+        assert "Too many" in data["error"]
+
+    def test_rate_limit_does_not_block_correct_password(self, client):
+        for _ in range(4):
+            self._upload(client, password="wrong")
+        resp = self._upload(client)
+        assert resp.status_code == 201
