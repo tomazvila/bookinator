@@ -19,7 +19,7 @@ CHUNK_OVERLAP = 256
 EMBEDDING_DIMS = 512
 SUPPORTED_EXTENSIONS = {".pdf", ".epub"}
 EMBEDDING_BATCH_SIZE = 128
-INDEX_BATCH_SIZE = 10
+INDEX_BATCH_SIZE = 100
 
 
 # ---------------------------------------------------------------------------
