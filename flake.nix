@@ -13,14 +13,6 @@
         python = pkgs.python3;
         pythonPkgs = python.pkgs;
 
-        pipPkgs = ps: pkgs.runCommand "pip-packages" {
-          buildInputs = [ (python.withPackages (p: [ p.pip ])) ];
-        } ''
-          mkdir -p $out/${python.sitePackages}
-          ${python}/bin/python -m pip install --target=$out/${python.sitePackages} \
-            voyageai sqlite-vec --quiet 2>/dev/null
-        '';
-
         allNixPkgs = ps: [
           ps.click
           ps.anthropic
@@ -44,9 +36,24 @@
             pythonPkgs.pytest
           ];
 
-          # Skip check phase — voyageai/sqlite-vec not available at build time in nix
+          # voyageai/sqlite-vec are optional deps, installed via pip at runtime
           doCheck = false;
         };
+
+        pythonWithPkgs = python.withPackages (ps: (allNixPkgs ps) ++ [ ps.pip ]);
+
+        # Entrypoint script that installs optional PyPI deps then starts the app
+        entrypoint = pkgs.writeShellScriptBin "bookstuff-entrypoint" ''
+          export PATH="${pythonWithPkgs}/bin:${pkgs.coreutils}/bin:$PATH"
+          PIP_DIR="/tmp/pip-packages"
+          if [ ! -d "$PIP_DIR/voyageai" ]; then
+            echo "Installing semantic search dependencies..."
+            pip install --target="$PIP_DIR" voyageai sqlite-vec --quiet 2>/dev/null || \
+              echo "Warning: Could not install semantic search deps, continuing without them"
+          fi
+          export PYTHONPATH="$PIP_DIR:$PYTHONPATH"
+          exec bookstuff-web "$@"
+        '';
 
         devShell = pkgs.mkShell {
           packages = [
@@ -67,12 +74,9 @@
         dockerImage = pkgs.dockerTools.buildLayeredImage {
           name = "books-web";
           tag = "latest";
-          contents = [ bookstuff pkgs.cacert pkgs.python3Packages.pip ];
+          contents = [ bookstuff pythonWithPkgs pkgs.cacert pkgs.bash pkgs.coreutils ];
           config = {
-            Cmd = [
-              "${pkgs.bash}/bin/bash" "-c"
-              "pip install --target=/pip-pkgs voyageai sqlite-vec -q && PYTHONPATH=/pip-pkgs:$PYTHONPATH exec bookstuff-web"
-            ];
+            Cmd = [ "${entrypoint}/bin/bookstuff-entrypoint" ];
             Env = [
               "BOOKS_DIR=/books"
               "PORT=5001"

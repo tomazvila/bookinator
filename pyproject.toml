@@ -13,6 +13,10 @@ dependencies = [
   "pymupdf",
   "flask",
   "argon2-cffi",
+]
+
+[project.optional-dependencies]
+semantic = [
   "voyageai",
   "sqlite-vec",
 ]
