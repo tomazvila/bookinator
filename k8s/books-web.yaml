@@ -41,6 +41,11 @@ spec:
                 secretKeyRef:
                   name: books-web-auth
                   key: pepper
+            - name: VOYAGE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: books-web-auth
+                  key: voyage-api-key
           volumeMounts:
             - name: books-volume
               mountPath: /books

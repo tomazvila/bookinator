@@ -131,8 +131,12 @@ function renderResults(books, count) {
     let html = '<table><thead><tr><th>Title</th><th>Author</th><th>Category</th><th>Type</th><th>Size</th><th></th></tr></thead><tbody>';
     for (let i = 0; i < books.length; i++) {
         const b = books[i];
+        const matchBadge = b.match_type === 'semantic' || b.match_type === 'hybrid'
+            ? '<span class="match-badge">content match</span>' : '';
+        const matchCtx = b.match_context
+            ? `<div class="match-context">${esc(b.match_context)}</div>` : '';
         html += `<tr class="clickable-row" tabindex="0" data-idx="${i}" data-href="/book/${b.id}" data-dl="/download/${encodeURIComponent(b.category)}/${encodeURIComponent(b.filename)}">
-            <td class="title-cell">${esc(b.title)}</td>
+            <td class="title-cell">${esc(b.title)}${matchBadge}${matchCtx}</td>
             <td>${esc(b.author)}</td>
             <td><span class="chip small">${humanize(esc(b.category))}</span></td>
             <td><span class="ext ${extClass(b.extension)}">${b.extension}</span></td>

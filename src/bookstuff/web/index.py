@@ -72,6 +72,11 @@ def init_db(db_path: str) -> sqlite3.Connection:
         END;
     """)
     conn.commit()
+
+    # Initialize semantic search tables
+    from bookstuff.web.semantic import init_semantic_db
+    init_semantic_db(conn)
+
     return conn
 
 
@@ -197,7 +202,12 @@ def get_categories(conn: sqlite3.Connection) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def start_reindex_thread(conn: sqlite3.Connection, books_dir: str, interval: int = REINDEX_INTERVAL) -> threading.Thread:
+def start_reindex_thread(
+    conn: sqlite3.Connection,
+    books_dir: str,
+    interval: int = REINDEX_INTERVAL,
+    voyage_api_key: str | None = None,
+) -> threading.Thread:
     """Start a background thread that re-indexes periodically."""
     def _loop():
         while True:
@@ -206,6 +216,13 @@ def start_reindex_thread(conn: sqlite3.Connection, books_dir: str, interval: int
                 reindex(conn, books_dir)
             except Exception:
                 logger.exception("Reindex failed")
+
+            if voyage_api_key:
+                try:
+                    from bookstuff.web.semantic import index_pending_books
+                    index_pending_books(conn, books_dir, voyage_api_key)
+                except Exception:
+                    logger.exception("Semantic indexing failed")
 
     t = threading.Thread(target=_loop, daemon=True)
     t.start()

@@ -13,6 +13,8 @@ dependencies = [
   "pymupdf",
   "flask",
   "argon2-cffi",
+  "voyageai",
+  "sqlite-vec",
 ]
 
 [project.scripts]

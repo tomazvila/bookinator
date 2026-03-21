@@ -11,6 +11,7 @@ from werkzeug.utils import secure_filename
 from bookstuff.web.index import get_db_path, init_db, reindex, search, get_categories, start_reindex_thread, EBOOK_EXTENSIONS, parse_filename
 from bookstuff.web.password import verify_password
 from bookstuff.web.preview import generate_preview
+from bookstuff.web.semantic import hybrid_search, get_embedding_status, is_semantic_available, index_pending_books
 
 logger = logging.getLogger(__name__)
 
@@ -44,16 +45,29 @@ def create_app(books_dir: str | None = None, reindex_on_start: bool = True) -> F
     app.config["BOOKS_DIR"] = books_dir
     app.config["UPLOAD_PASSWORD_HASH"] = os.environ.get("UPLOAD_PASSWORD_HASH", "")
     app.config["UPLOAD_PEPPER"] = os.environ.get("UPLOAD_PEPPER", "")
+    app.config["VOYAGE_API_KEY"] = os.environ.get("VOYAGE_API_KEY", "")
 
     upload_limiter = _RateLimiter()
 
     db_path = get_db_path(books_dir)
     conn = init_db(db_path)
 
+    voyage_api_key = app.config["VOYAGE_API_KEY"]
+
     if reindex_on_start:
         count = reindex(conn, books_dir)
         logger.info("Initial index: %d books", count)
-        start_reindex_thread(conn, books_dir)
+        start_reindex_thread(conn, books_dir, voyage_api_key=voyage_api_key)
+
+        # Kick off initial semantic indexing in background
+        if voyage_api_key:
+            import threading
+            def _initial_semantic_index():
+                try:
+                    index_pending_books(conn, books_dir, voyage_api_key)
+                except Exception:
+                    logger.exception("Initial semantic indexing failed")
+            threading.Thread(target=_initial_semantic_index, daemon=True).start()
 
     @app.route("/")
     def index():
@@ -65,8 +79,20 @@ def create_app(books_dir: str | None = None, reindex_on_start: bool = True) -> F
         category = request.args.get("category", "").strip() or None
         limit = min(int(request.args.get("limit", 50)), 200)
         offset = int(request.args.get("offset", 0))
-        results = search(conn, q, category=category, limit=limit, offset=offset)
-        return jsonify({"results": results, "count": len(results)})
+        mode = request.args.get("mode", "hybrid").strip()
+
+        if mode == "hybrid" and voyage_api_key:
+            results = hybrid_search(conn, q, voyage_api_key, category=category, limit=limit, offset=offset)
+            return jsonify({"results": results, "count": len(results), "mode": "hybrid"})
+        else:
+            results = search(conn, q, category=category, limit=limit, offset=offset)
+            return jsonify({"results": results, "count": len(results), "mode": "keyword"})
+
+    @app.route("/api/search/status")
+    def api_search_status():
+        status = get_embedding_status(conn)
+        status["semantic_available"] = is_semantic_available(conn) and bool(voyage_api_key)
+        return jsonify(status)
 
     @app.route("/api/categories")
     def api_categories():
@@ -157,10 +183,20 @@ def create_app(books_dir: str | None = None, reindex_on_start: bool = True) -> F
         )
         conn.commit()
 
-        book_id = conn.execute("SELECT id FROM books WHERE path = ?", (rel_path,)).fetchone()
+        book_row = conn.execute("SELECT id FROM books WHERE path = ?", (rel_path,)).fetchone()
+        book_id = book_row["id"] if book_row else None
+
+        # Queue for semantic indexing
+        if book_id:
+            conn.execute(
+                "INSERT OR IGNORE INTO embedding_status (book_id, status) VALUES (?, 'pending')",
+                (book_id,),
+            )
+            conn.commit()
+
         return jsonify({
             "ok": True,
-            "id": book_id["id"] if book_id else None,
+            "id": book_id,
             "filename": filename,
             "category": category,
         }), 201

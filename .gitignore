@@ -10,6 +10,8 @@ build/
 # Nix
 result
 result-*
+.nix-pip/
+.pip-packages/
 
 # Environment
 .env
