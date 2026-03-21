@@ -13,6 +13,36 @@
         python = pkgs.python3;
         pythonPkgs = python.pkgs;
 
+        # sqlite-vec: fetch platform-specific wheel from PyPI
+        sqliteVecWheel = {
+          x86_64-linux = {
+            url = "https://files.pythonhosted.org/packages/59/56/6ff304d917ee79da769708dad0aed5fd34c72cbd0ae5e38bcc56cdc652a4/sqlite_vec-0.1.7-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.manylinux1_x86_64.whl";
+            sha256 = "ad654283cb9c059852ce2d82018c757b06a705ada568f8b126022a131189818e";
+          };
+          aarch64-linux = {
+            url = "https://files.pythonhosted.org/packages/59/56/6ff304d917ee79da769708dad0aed5fd34c72cbd0ae5e38bcc56cdc652a4/sqlite_vec-0.1.7-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.manylinux1_x86_64.whl";
+            sha256 = "ad654283cb9c059852ce2d82018c757b06a705ada568f8b126022a131189818e";
+          };
+          aarch64-darwin = {
+            url = "https://files.pythonhosted.org/packages/e6/c9/1cd2f59b539096cd2ce6b540247b2dfe3c47ba04d9368b5e8e3dc86498d4/sqlite_vec-0.1.7-py3-none-macosx_11_0_arm64.whl";
+            sha256 = "6d272593d1b45ec7ea289b160ee6e5fafbaa6e1f5ba15f1305c012b0bda43653";
+          };
+          x86_64-darwin = {
+            url = "https://files.pythonhosted.org/packages/e6/c9/1cd2f59b539096cd2ce6b540247b2dfe3c47ba04d9368b5e8e3dc86498d4/sqlite_vec-0.1.7-py3-none-macosx_11_0_arm64.whl";
+            sha256 = "6d272593d1b45ec7ea289b160ee6e5fafbaa6e1f5ba15f1305c012b0bda43653";
+          };
+        }.${system};
+
+        sqlite-vec = pythonPkgs.buildPythonPackage {
+          pname = "sqlite-vec";
+          version = "0.1.7";
+          format = "wheel";
+          src = pkgs.fetchurl {
+            inherit (sqliteVecWheel) url sha256;
+          };
+          doCheck = false;
+        };
+
         allNixPkgs = ps: [
           ps.click
           ps.anthropic
@@ -20,6 +50,7 @@
           ps.pymupdf
           ps.flask
           ps.argon2-cffi
+          ps.requests
         ];
 
         bookstuff = pythonPkgs.buildPythonApplication {
@@ -30,53 +61,29 @@
 
           nativeBuildInputs = [ pythonPkgs.setuptools ];
 
-          propagatedBuildInputs = (allNixPkgs pythonPkgs);
+          propagatedBuildInputs = (allNixPkgs pythonPkgs) ++ [ sqlite-vec ];
 
-          checkInputs = [
-            pythonPkgs.pytest
-          ];
+          checkInputs = [ pythonPkgs.pytest ];
 
-          # voyageai/sqlite-vec are optional deps, installed via pip at runtime
           doCheck = false;
         };
 
-        pythonWithPkgs = python.withPackages (ps: (allNixPkgs ps) ++ [ ps.pip ]);
-
-        # Entrypoint script that installs optional PyPI deps then starts the app
-        entrypoint = pkgs.writeShellScriptBin "bookstuff-entrypoint" ''
-          export PATH="${pythonWithPkgs}/bin:${pkgs.coreutils}/bin:$PATH"
-          PIP_DIR="/tmp/pip-packages"
-          if [ ! -d "$PIP_DIR/voyageai" ]; then
-            echo "Installing semantic search dependencies..."
-            pip install --target="$PIP_DIR" voyageai sqlite-vec --quiet 2>/dev/null || \
-              echo "Warning: Could not install semantic search deps, continuing without them"
-          fi
-          export PYTHONPATH="$PIP_DIR:$PYTHONPATH"
-          exec bookstuff-web "$@"
-        '';
-
         devShell = pkgs.mkShell {
           packages = [
-            (python.withPackages (ps: (allNixPkgs ps) ++ [ ps.pytest ps.pip ]))
+            (python.withPackages (ps: (allNixPkgs ps) ++ [ ps.pytest sqlite-vec ]))
             pkgs.rsync
           ];
           shellHook = ''
             export PYTHONPATH="$PWD/src:$PYTHONPATH"
-            # Install PyPI-only packages to a local directory
-            export PIP_TARGET="$PWD/.pip-packages"
-            export PYTHONPATH="$PIP_TARGET:$PYTHONPATH"
-            if [ ! -d "$PIP_TARGET/voyageai" ]; then
-              echo "Installing voyageai and sqlite-vec..."
-              pip install --target="$PIP_TARGET" voyageai sqlite-vec -q
-            fi
           '';
         };
+
         dockerImage = pkgs.dockerTools.buildLayeredImage {
           name = "books-web";
           tag = "latest";
-          contents = [ bookstuff pythonWithPkgs pkgs.cacert pkgs.bash pkgs.coreutils ];
+          contents = [ bookstuff pkgs.cacert ];
           config = {
-            Cmd = [ "${entrypoint}/bin/bookstuff-entrypoint" ];
+            Cmd = [ "bookstuff-web" ];
             Env = [
               "BOOKS_DIR=/books"
               "PORT=5001"
@@ -85,12 +92,13 @@
             ExposedPorts = { "5001/tcp" = {}; };
           };
         };
+
         devServer = pkgs.writeShellScriptBin "bookstuff-dev" ''
           export PYTHONPATH="${self}/src:$PYTHONPATH"
           export BOOKS_DIR="''${BOOKS_DIR:-/tmp/books-local}"
           export PORT="''${PORT:-5001}"
           echo "Starting dev server on http://localhost:$PORT (BOOKS_DIR=$BOOKS_DIR)"
-          exec ${python.withPackages (ps: (allNixPkgs ps))}/bin/python -m bookstuff.web.app
+          exec ${python.withPackages (ps: (allNixPkgs ps) ++ [ sqlite-vec ])}/bin/python -m bookstuff.web.app
         '';
       in {
         packages.default = bookstuff;

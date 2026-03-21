@@ -292,31 +292,49 @@ def is_semantic_available(conn: sqlite3.Connection) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Embedding generation
+# Embedding generation (direct HTTP, no voyageai SDK needed)
 # ---------------------------------------------------------------------------
+
+VOYAGE_API_URL = "https://api.voyageai.com/v1/embeddings"
+VOYAGE_MODEL = "voyage-3-lite"
+
+
+def _voyage_embed(texts: list[str], api_key: str, input_type: str = "document") -> list[list[float]]:
+    """Call Voyage AI embeddings API directly via requests."""
+    import requests
+
+    resp = requests.post(
+        VOYAGE_API_URL,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "input": texts,
+            "model": VOYAGE_MODEL,
+            "input_type": input_type,
+        },
+        timeout=60,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    return [item["embedding"] for item in data["data"]]
+
 
 def generate_embeddings(texts: list[str], api_key: str) -> list[list[float]]:
     """Generate embeddings via Voyage AI API."""
-    import voyageai
-
-    client = voyageai.Client(api_key=api_key)
     all_embeddings: list[list[float]] = []
 
     for i in range(0, len(texts), EMBEDDING_BATCH_SIZE):
         batch = texts[i : i + EMBEDDING_BATCH_SIZE]
-        result = client.embed(batch, model="voyage-3-lite", input_type="document")
-        all_embeddings.extend(result.embeddings)
+        all_embeddings.extend(_voyage_embed(batch, api_key, input_type="document"))
 
     return all_embeddings
 
 
 def generate_query_embedding(query: str, api_key: str) -> list[float]:
     """Generate embedding for a search query."""
-    import voyageai
-
-    client = voyageai.Client(api_key=api_key)
-    result = client.embed([query], model="voyage-3-lite", input_type="query")
-    return result.embeddings[0]
+    return _voyage_embed([query], api_key, input_type="query")[0]
 
 
 # ---------------------------------------------------------------------------
