@@ -55,7 +55,7 @@ spec:
               memory: "256Mi"
               cpu: "100m"
             limits:
-              memory: "1024Mi"
+              memory: "4Gi"
               cpu: "500m"
           livenessProbe:
             httpGet:
