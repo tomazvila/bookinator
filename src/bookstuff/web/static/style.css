@@ -33,7 +33,7 @@ body::before {
     inset: 0;
     background:
         linear-gradient(to bottom, oklch(0.13 0.02 250 / 0.88), oklch(0.11 0.02 250 / 0.94)),
-        url('/static/background.png') center / cover no-repeat fixed;
+        url('/static/background.png') center / cover no-repeat;
     z-index: -1;
 }
 
