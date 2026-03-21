@@ -274,6 +274,7 @@ def init_semantic_db(conn: sqlite3.Connection) -> None:
 def _load_sqlite_vec(conn: sqlite3.Connection) -> bool:
     """Try to load the sqlite-vec extension. Returns True on success."""
     try:
+        conn.enable_load_extension(True)
         import sqlite_vec
         sqlite_vec.load(conn)
         return True
