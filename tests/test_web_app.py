@@ -6,6 +6,11 @@ import json
 import pytest
 
 from bookstuff.web.app import create_app
+from bookstuff.web.password import hash_password
+
+TEST_PASSWORD = "test-upload-pw"
+TEST_PEPPER = "test-pepper-secret"
+TEST_HASH = hash_password(TEST_PASSWORD, TEST_PEPPER)
 
 
 @pytest.fixture()
@@ -31,6 +36,8 @@ def books_dir(tmp_path):
 def client(books_dir):
     app = create_app(books_dir=str(books_dir), reindex_on_start=True)
     app.config["TESTING"] = True
+    app.config["UPLOAD_PASSWORD_HASH"] = TEST_HASH
+    app.config["UPLOAD_PEPPER"] = TEST_PEPPER
     with app.test_client() as c:
         yield c
 
@@ -109,12 +116,10 @@ class TestDownload:
 
 
 class TestUpload:
-    PASSWORD = "AfAA7B63218"
-
     def _upload(self, client, filename="Test - Book.pdf", content=b"fakepdf",
                 category="programming", password=None):
         if password is None:
-            password = self.PASSWORD
+            password = TEST_PASSWORD
         data = {
             "file": (io.BytesIO(content), filename),
             "category": category,
@@ -142,7 +147,7 @@ class TestUpload:
         assert resp.status_code == 401
 
     def test_upload_no_file(self, client):
-        resp = client.post("/api/upload", data={"password": self.PASSWORD},
+        resp = client.post("/api/upload", data={"password": TEST_PASSWORD},
                            content_type="multipart/form-data")
         assert resp.status_code == 400
 

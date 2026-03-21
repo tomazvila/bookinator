@@ -31,6 +31,16 @@ spec:
               value: /books
             - name: PORT
               value: "5001"
+            - name: UPLOAD_PASSWORD_HASH
+              valueFrom:
+                secretKeyRef:
+                  name: books-web-auth
+                  key: password-hash
+            - name: UPLOAD_PEPPER
+              valueFrom:
+                secretKeyRef:
+                  name: books-web-auth
+                  key: pepper
           volumeMounts:
             - name: books-volume
               mountPath: /books

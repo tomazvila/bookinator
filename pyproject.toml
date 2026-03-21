@@ -12,6 +12,7 @@ dependencies = [
   "ebooklib",
   "pymupdf",
   "flask",
+  "argon2-cffi",
 ]
 
 [project.scripts]

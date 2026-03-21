@@ -1,7 +1,5 @@
 """Flask web application for browsing and searching the book collection."""
 
-import hashlib
-import hmac
 import logging
 import os
 
@@ -9,6 +7,7 @@ from flask import Flask, jsonify, render_template, request, send_from_directory,
 from werkzeug.utils import secure_filename
 
 from bookstuff.web.index import get_db_path, init_db, reindex, search, get_categories, start_reindex_thread, EBOOK_EXTENSIONS, parse_filename
+from bookstuff.web.password import verify_password
 from bookstuff.web.preview import generate_preview
 
 logger = logging.getLogger(__name__)
@@ -20,7 +19,8 @@ def create_app(books_dir: str | None = None, reindex_on_start: bool = True) -> F
 
     app = Flask(__name__)
     app.config["BOOKS_DIR"] = books_dir
-    app.config["UPLOAD_PASSWORD"] = os.environ.get("UPLOAD_PASSWORD", "AfAA7B63218")
+    app.config["UPLOAD_PASSWORD_HASH"] = os.environ.get("UPLOAD_PASSWORD_HASH", "")
+    app.config["UPLOAD_PEPPER"] = os.environ.get("UPLOAD_PEPPER", "")
 
     db_path = get_db_path(books_dir)
     conn = init_db(db_path)
@@ -84,7 +84,8 @@ def create_app(books_dir: str | None = None, reindex_on_start: bool = True) -> F
     @app.route("/api/upload", methods=["POST"])
     def api_upload():
         password = request.form.get("password", "")
-        if not hmac.compare_digest(password, app.config["UPLOAD_PASSWORD"]):
+        if not verify_password(password, app.config["UPLOAD_PASSWORD_HASH"],
+                               app.config["UPLOAD_PEPPER"]):
             return jsonify({"error": "Invalid password"}), 401
 
         file = request.files.get("file")

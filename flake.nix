@@ -27,6 +27,7 @@
             pythonPkgs.ebooklib
             pythonPkgs.pymupdf
             pythonPkgs.flask
+            pythonPkgs.argon2-cffi
           ];
 
           checkInputs = [
@@ -46,6 +47,7 @@
               ps.ebooklib
               ps.pymupdf
               ps.flask
+              ps.argon2-cffi
               ps.pytest
             ]))
             pkgs.rsync
@@ -74,7 +76,7 @@
           export PORT="''${PORT:-5001}"
           echo "Starting dev server on http://localhost:$PORT (BOOKS_DIR=$BOOKS_DIR)"
           exec ${python.withPackages (ps: [
-            ps.click ps.anthropic ps.ebooklib ps.pymupdf ps.flask
+            ps.click ps.anthropic ps.ebooklib ps.pymupdf ps.flask ps.argon2-cffi
           ])}/bin/python -m bookstuff.web.app
         '';
       in {
