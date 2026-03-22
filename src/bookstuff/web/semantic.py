@@ -277,19 +277,24 @@ def init_semantic_db(conn: sqlite3.Connection) -> None:
     """)
     conn.commit()
 
-    # Check if model changed — if so, wipe old embeddings
+    # Check if embeddings need reset: model changed OR table has wrong dimensions
     row = conn.execute("SELECT model_name, dims FROM embedding_model WHERE id = 1").fetchone()
     need_reset = False
-    if row is None:
-        # First run with migration tracking — check if old embeddings exist
-        # Use sqlite_master instead of querying the table (vec0 extension not loaded yet)
-        exists = conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='chunk_embeddings'"
-        ).fetchone()
-        if exists:
+
+    # Check actual table dimensions via CREATE statement in sqlite_master
+    table_sql = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='chunk_embeddings'"
+    ).fetchone()
+    if table_sql:
+        expected_fragment = f"float[{EMBEDDING_DIMS}]"
+        if expected_fragment not in table_sql[0]:
             need_reset = True
-            logger.info("Found pre-existing chunk_embeddings without model tracking — resetting")
-    elif row[0] != _CURRENT_MODEL or row[1] != EMBEDDING_DIMS:
+            logger.info("chunk_embeddings has wrong dimensions — resetting")
+
+    if not need_reset and row is None and table_sql:
+        need_reset = True
+        logger.info("Found pre-existing chunk_embeddings without model tracking — resetting")
+    elif not need_reset and row and (row[0] != _CURRENT_MODEL or row[1] != EMBEDDING_DIMS):
         need_reset = True
         logger.info(
             "Embedding model changed from %s/%d to %s/%d — resetting all embeddings",
