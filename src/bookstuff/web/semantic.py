@@ -279,11 +279,23 @@ def init_semantic_db(conn: sqlite3.Connection) -> None:
 
     # Check if model changed — if so, wipe old embeddings
     row = conn.execute("SELECT model_name, dims FROM embedding_model WHERE id = 1").fetchone()
-    if row and (row[0] != _CURRENT_MODEL or row[1] != EMBEDDING_DIMS):
+    need_reset = False
+    if row is None:
+        # First run with migration tracking — check if old embeddings exist
+        try:
+            conn.execute("SELECT 1 FROM chunk_embeddings LIMIT 0")
+            need_reset = True  # Old table exists without model tracking
+            logger.info("Found pre-existing chunk_embeddings without model tracking — resetting")
+        except Exception:
+            pass  # Table doesn't exist yet, nothing to reset
+    elif row[0] != _CURRENT_MODEL or row[1] != EMBEDDING_DIMS:
+        need_reset = True
         logger.info(
             "Embedding model changed from %s/%d to %s/%d — resetting all embeddings",
             row[0], row[1], _CURRENT_MODEL, EMBEDDING_DIMS,
         )
+
+    if need_reset:
         conn.execute("DELETE FROM book_chunks")
         conn.execute("UPDATE embedding_status SET status = 'pending', file_hash = NULL, chunk_count = 0")
         try:
