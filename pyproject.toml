@@ -18,6 +18,9 @@ dependencies = [
 [project.optional-dependencies]
 semantic = [
   "sqlite-vec",
+  "numpy",
+  "onnxruntime",
+  "tokenizers",
 ]
 
 [project.scripts]

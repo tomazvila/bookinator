@@ -43,6 +43,34 @@
           doCheck = false;
         };
 
+        # Fetch all-MiniLM-L6-v2 ONNX model files from HuggingFace
+        embeddingModel = pkgs.stdenvNoCC.mkDerivation {
+          pname = "all-MiniLM-L6-v2-onnx";
+          version = "1.0.2";
+
+          srcs = [
+            (pkgs.fetchurl {
+              url = "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model.onnx";
+              sha256 = "0lk40hb4cll24q8q504gwdybnadmvd16805wisgii7sqwhpxgmbg";
+              name = "model.onnx";
+            })
+            (pkgs.fetchurl {
+              url = "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/tokenizer.json";
+              sha256 = "0dr0aw8z8c5awl2spvi778d5dchi8vvv25vz79gbpx9bixic6l5y";
+              name = "tokenizer.json";
+            })
+          ];
+
+          dontUnpack = true;
+          installPhase = ''
+            mkdir -p $out
+            for src in $srcs; do
+              name=$(stripHash "$src")
+              cp "$src" "$out/$name"
+            done
+          '';
+        };
+
         allNixPkgs = ps: [
           ps.click
           ps.anthropic
@@ -51,6 +79,9 @@
           ps.flask
           ps.argon2-cffi
           ps.requests
+          ps.numpy
+          ps.onnxruntime
+          ps.tokenizers
         ];
 
         bookstuff = pythonPkgs.buildPythonApplication {
@@ -81,16 +112,23 @@
         dockerImage = pkgs.dockerTools.buildLayeredImage {
           name = "books-web";
           tag = "latest";
-          contents = [ bookstuff pkgs.cacert ];
+          contents = [ bookstuff embeddingModel pkgs.cacert ];
           config = {
             Cmd = [ "bookstuff-web" ];
             Env = [
               "BOOKS_DIR=/books"
               "PORT=5001"
+              "EMBEDDING_MODEL_DIR=/model"
               "SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
             ];
             ExposedPorts = { "5001/tcp" = {}; };
           };
+          # Place model files at /model in the image
+          extraCommands = ''
+            mkdir -p model
+            cp ${embeddingModel}/model.onnx model/
+            cp ${embeddingModel}/tokenizer.json model/
+          '';
         };
 
         devServer = pkgs.writeShellScriptBin "bookstuff-dev" ''
@@ -104,6 +142,7 @@
         packages.default = bookstuff;
         packages.docker = dockerImage;
         packages.dev = devServer;
+        packages.embeddingModel = embeddingModel;
         apps.dev = {
           type = "app";
           program = "${devServer}/bin/bookstuff-dev";

@@ -31,6 +31,8 @@ spec:
               value: /books
             - name: PORT
               value: "5001"
+            - name: EMBEDDING_MODEL_DIR
+              value: /model
             - name: UPLOAD_PASSWORD_HASH
               valueFrom:
                 secretKeyRef:
@@ -41,11 +43,6 @@ spec:
                 secretKeyRef:
                   name: books-web-auth
                   key: pepper
-            - name: VOYAGE_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: books-web-auth
-                  key: voyage-api-key
           volumeMounts:
             - name: books-volume
               mountPath: /books

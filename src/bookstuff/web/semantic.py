@@ -12,13 +12,17 @@ from pathlib import Path
 import fitz  # pymupdf
 from ebooklib import epub
 
+from bookstuff.web.embeddings import (
+    EMBEDDING_DIMS,
+    get_embedder,
+    serialize_embedding,
+)
+
 logger = logging.getLogger(__name__)
 
 CHUNK_SIZE = 2000  # characters
 CHUNK_OVERLAP = 256
-EMBEDDING_DIMS = 512
 SUPPORTED_EXTENSIONS = {".pdf", ".epub"}
-EMBEDDING_BATCH_SIZE = 128
 INDEX_BATCH_SIZE = 100
 
 
@@ -238,6 +242,9 @@ def hash_file(path: str, chunk_size: int = 8192) -> str:
 # Database schema
 # ---------------------------------------------------------------------------
 
+_CURRENT_MODEL = "all-MiniLM-L6-v2"
+
+
 def init_semantic_db(conn: sqlite3.Connection) -> None:
     """Create semantic search tables. Safe to call multiple times."""
     conn.execute("""
@@ -260,6 +267,37 @@ def init_semantic_db(conn: sqlite3.Connection) -> None:
             indexed_at TEXT
         )
     """)
+    # Track which model was used — reset embeddings if it changes
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS embedding_model (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            model_name TEXT NOT NULL,
+            dims INTEGER NOT NULL
+        )
+    """)
+    conn.commit()
+
+    # Check if model changed — if so, wipe old embeddings
+    row = conn.execute("SELECT model_name, dims FROM embedding_model WHERE id = 1").fetchone()
+    if row and (row[0] != _CURRENT_MODEL or row[1] != EMBEDDING_DIMS):
+        logger.info(
+            "Embedding model changed from %s/%d to %s/%d — resetting all embeddings",
+            row[0], row[1], _CURRENT_MODEL, EMBEDDING_DIMS,
+        )
+        conn.execute("DELETE FROM book_chunks")
+        conn.execute("UPDATE embedding_status SET status = 'pending', file_hash = NULL, chunk_count = 0")
+        try:
+            conn.execute("DROP TABLE IF EXISTS chunk_embeddings")
+        except Exception:
+            pass
+        conn.execute("DELETE FROM embedding_model")
+
+    conn.execute(
+        "INSERT OR REPLACE INTO embedding_model (id, model_name, dims) VALUES (1, ?, ?)",
+        (_CURRENT_MODEL, EMBEDDING_DIMS),
+    )
+    conn.commit()
+
     # sqlite-vec virtual table — created only if extension is available
     if _load_sqlite_vec(conn):
         conn.execute(f"""
@@ -293,49 +331,38 @@ def is_semantic_available(conn: sqlite3.Connection) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Embedding generation (direct HTTP, no voyageai SDK needed)
+# Text quality validation
 # ---------------------------------------------------------------------------
 
-VOYAGE_API_URL = "https://api.voyageai.com/v1/embeddings"
-VOYAGE_MODEL = "voyage-3-lite"
+def is_garbled_text(text: str, sample_size: int = 2000) -> bool:
+    """Detect garbled/corrupted text from broken PDF font encodings.
 
+    Checks a sample of the text for a high ratio of non-printable characters,
+    control characters, or Unicode replacement characters that indicate the
+    PDF text extraction produced garbage.
+    """
+    sample = text[:sample_size]
+    if not sample:
+        return True
 
-def _voyage_embed(texts: list[str], api_key: str, input_type: str = "document") -> list[list[float]]:
-    """Call Voyage AI embeddings API directly via requests."""
-    import requests
+    bad_chars = 0
+    for ch in sample:
+        cp = ord(ch)
+        # Control characters (except newline, tab, carriage return)
+        if cp < 32 and cp not in (9, 10, 13):
+            bad_chars += 1
+        # Unicode replacement character
+        elif cp == 0xFFFD:
+            bad_chars += 1
+        # Private use area
+        elif 0xE000 <= cp <= 0xF8FF:
+            bad_chars += 1
+        # Specials block (includes interlinear annotation anchors, etc.)
+        elif 0xFFF0 <= cp <= 0xFFFE:
+            bad_chars += 1
 
-    resp = requests.post(
-        VOYAGE_API_URL,
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        json={
-            "input": texts,
-            "model": VOYAGE_MODEL,
-            "input_type": input_type,
-        },
-        timeout=60,
-    )
-    resp.raise_for_status()
-    data = resp.json()
-    return [item["embedding"] for item in data["data"]]
-
-
-def generate_embeddings(texts: list[str], api_key: str) -> list[list[float]]:
-    """Generate embeddings via Voyage AI API."""
-    all_embeddings: list[list[float]] = []
-
-    for i in range(0, len(texts), EMBEDDING_BATCH_SIZE):
-        batch = texts[i : i + EMBEDDING_BATCH_SIZE]
-        all_embeddings.extend(_voyage_embed(batch, api_key, input_type="document"))
-
-    return all_embeddings
-
-
-def generate_query_embedding(query: str, api_key: str) -> list[float]:
-    """Generate embedding for a search query."""
-    return _voyage_embed([query], api_key, input_type="query")[0]
+    ratio = bad_chars / len(sample)
+    return ratio > 0.05
 
 
 # ---------------------------------------------------------------------------
@@ -347,12 +374,16 @@ def index_book(
     book_id: int,
     book_path: str,
     extension: str,
-    voyage_api_key: str,
 ) -> bool:
     """Index a single book: extract text, chunk, embed, store.
 
     Returns True on success.
     """
+    embedder = get_embedder()
+    if embedder is None:
+        logger.warning("Embedding model not available, skipping book %d", book_id)
+        return False
+
     # Mark as processing
     conn.execute(
         "UPDATE embedding_status SET status = 'processing', error_message = NULL WHERE book_id = ?",
@@ -380,6 +411,16 @@ def index_book(
             conn.commit()
             return False
 
+        # Reject garbled text from broken PDF font encodings
+        if is_garbled_text(text):
+            conn.execute(
+                "UPDATE embedding_status SET status = 'unsupported', error_message = 'Garbled text detected' WHERE book_id = ?",
+                (book_id,),
+            )
+            conn.commit()
+            logger.info("Skipping book %d: garbled text detected", book_id)
+            return False
+
         # Chunk
         chunks = chunk_text(text, page_offsets=page_offsets)
         if not chunks:
@@ -390,9 +431,9 @@ def index_book(
             conn.commit()
             return False
 
-        # Generate embeddings
+        # Generate embeddings locally
         chunk_texts = [c["text"] for c in chunks]
-        embeddings = generate_embeddings(chunk_texts, voyage_api_key)
+        embeddings = embedder.embed(chunk_texts)
 
         # Clear old data for this book
         old_chunk_ids = [
@@ -417,7 +458,7 @@ def index_book(
             chunk_id = cursor.lastrowid
             conn.execute(
                 "INSERT INTO chunk_embeddings (chunk_id, embedding) VALUES (?, ?)",
-                (chunk_id, _serialize_embedding(embedding)),
+                (chunk_id, serialize_embedding(embedding)),
             )
 
         # Update status
@@ -443,20 +484,13 @@ def index_book(
         return False
 
 
-def _serialize_embedding(embedding: list[float]) -> bytes:
-    """Serialize embedding to bytes for sqlite-vec."""
-    import struct
-    return struct.pack(f"{len(embedding)}f", *embedding)
-
-
 def index_pending_books(
     conn: sqlite3.Connection,
     books_dir: str,
-    voyage_api_key: str,
     batch_size: int = INDEX_BATCH_SIZE,
 ) -> int:
     """Index books that need embedding. Returns count of newly indexed books."""
-    if not voyage_api_key:
+    if get_embedder() is None:
         return 0
 
     if not is_semantic_available(conn):
@@ -518,7 +552,7 @@ def index_pending_books(
         book_path = os.path.join(books_dir, rel_path)
         if not os.path.exists(book_path):
             continue
-        if index_book(conn, book_id, book_path, extension, voyage_api_key):
+        if index_book(conn, book_id, book_path, extension):
             indexed += 1
 
     if indexed:
@@ -533,22 +567,19 @@ def index_pending_books(
 def semantic_search(
     conn: sqlite3.Connection,
     query: str,
-    voyage_api_key: str,
     category: str | None = None,
     limit: int = 50,
 ) -> list[dict]:
-    """Search books by semantic similarity to query.
-
-    Returns list of book dicts with match_context and match_page.
-    """
-    if not query.strip() or not voyage_api_key:
+    """Search books by semantic similarity using local embeddings."""
+    if not query.strip():
         return []
 
-    if not is_semantic_available(conn):
+    embedder = get_embedder()
+    if embedder is None or not is_semantic_available(conn):
         return []
 
-    query_embedding = generate_query_embedding(query, voyage_api_key)
-    query_bytes = _serialize_embedding(query_embedding)
+    query_embedding = embedder.embed_query(query)
+    query_bytes = serialize_embedding(query_embedding)
 
     # Vector search: get top chunks
     search_limit = limit * 3  # over-fetch since we dedupe by book
@@ -596,7 +627,6 @@ def semantic_search(
 def hybrid_search(
     conn: sqlite3.Connection,
     query: str,
-    voyage_api_key: str,
     category: str | None = None,
     limit: int = 50,
     offset: int = 0,
@@ -620,11 +650,11 @@ def hybrid_search(
     # Run FTS5 search
     fts_results = fts_search(conn, query, category=category, limit=limit * 2, offset=0)
 
-    # Run semantic search
+    # Run semantic search (local — no API call)
     sem_results = []
-    if voyage_api_key and is_semantic_available(conn):
+    if is_semantic_available(conn) and get_embedder() is not None:
         try:
-            sem_results = semantic_search(conn, query, voyage_api_key, category=category, limit=limit * 2)
+            sem_results = semantic_search(conn, query, category=category, limit=limit * 2)
         except Exception as e:
             logger.warning("Semantic search failed, using keyword only: %s", e)
 

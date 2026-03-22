@@ -14,10 +14,11 @@ from bookstuff.web.semantic import (
     hash_file,
     hybrid_search,
     init_semantic_db,
+    is_garbled_text,
     is_semantic_available,
-    _serialize_embedding,
     get_embedding_status,
 )
+from bookstuff.web.embeddings import serialize_embedding, EMBEDDING_DIMS
 
 
 # ---------------------------------------------------------------------------
@@ -168,6 +169,7 @@ class TestInitSemanticDb:
         ).fetchall()}
         assert "book_chunks" in tables
         assert "embedding_status" in tables
+        assert "embedding_model" in tables
 
     def test_idempotent(self, tmp_path):
         db_path = str(tmp_path / "test.db")
@@ -187,7 +189,52 @@ class TestInitSemanticDb:
 
 
 # ---------------------------------------------------------------------------
-# RRF Hybrid Search
+# Garbled text detection
+# ---------------------------------------------------------------------------
+
+class TestGarbledText:
+    def test_clean_text(self):
+        assert is_garbled_text("This is perfectly normal English text.") is False
+
+    def test_garbled_pdf_text(self):
+        # Real garbled text from PDF with broken font encoding (contains control chars \x11, \x0f)
+        garbled = "6HQLDX ãLV NDLPDV YDGLQRVL\x118åSHONLDL\x11 7ÔOXV\x0f YLHQRGDV DWURGR\x0f PLãNHOLÐ" * 20
+        assert is_garbled_text(garbled) is True
+
+    def test_control_characters(self):
+        text = "Some text\x00\x01\x02\x03\x04\x05" * 100
+        assert is_garbled_text(text) is True
+
+    def test_unicode_replacement_chars(self):
+        text = "Hello \ufffd\ufffd\ufffd world \ufffd\ufffd" * 100
+        assert is_garbled_text(text) is True
+
+    def test_private_use_area(self):
+        text = "Text \ue000\ue001\ue002 more \ue003" * 100
+        assert is_garbled_text(text) is True
+
+    def test_normal_unicode(self):
+        # Lithuanian text with proper Unicode should pass
+        text = "Priešaušrio vieškeliai — tai knyga apie Lietuvą."
+        assert is_garbled_text(text) is False
+
+    def test_empty_text(self):
+        assert is_garbled_text("") is True
+
+    def test_threshold_boundary(self):
+        # Just under 5% bad chars should pass
+        good = "a" * 96
+        bad = "\x00" * 4  # 4% bad
+        assert is_garbled_text(good + bad) is False
+
+        # Just over 5% should fail
+        good = "a" * 94
+        bad = "\x00" * 6  # 6% bad
+        assert is_garbled_text(good + bad) is True
+
+
+# ---------------------------------------------------------------------------
+# Hybrid Search (keyword-only fallback)
 # ---------------------------------------------------------------------------
 
 class TestHybridSearch:
@@ -228,29 +275,33 @@ class TestHybridSearch:
         conn.commit()
         return conn
 
+    @patch("bookstuff.web.semantic.get_embedder", return_value=None)
     @patch("bookstuff.web.semantic.is_semantic_available", return_value=False)
-    def test_fallback_to_keyword(self, mock_avail, tmp_path):
+    def test_fallback_to_keyword(self, mock_avail, mock_embedder, tmp_path):
         conn = self._setup_db(tmp_path)
-        results = hybrid_search(conn, "Python", "", category=None, limit=50)
+        results = hybrid_search(conn, "Python", category=None, limit=50)
         assert len(results) >= 1
         assert results[0]["match_type"] == "keyword"
 
     def test_empty_query_browse_mode(self, tmp_path):
         conn = self._setup_db(tmp_path)
-        results = hybrid_search(conn, "", "", category=None, limit=50)
+        results = hybrid_search(conn, "", category=None, limit=50)
         assert len(results) == 3
         for r in results:
             assert r["match_type"] == "browse"
 
-    def test_category_filter_keyword(self, tmp_path):
+    @patch("bookstuff.web.semantic.get_embedder", return_value=None)
+    def test_category_filter_keyword(self, mock_embedder, tmp_path):
         conn = self._setup_db(tmp_path)
-        results = hybrid_search(conn, "Author", "", category="programming", limit=50)
+        results = hybrid_search(conn, "Author", category="programming", limit=50)
         assert all(r["category"] == "programming" for r in results)
 
     @patch("bookstuff.web.semantic.semantic_search")
+    @patch("bookstuff.web.semantic.get_embedder")
     @patch("bookstuff.web.semantic.is_semantic_available", return_value=True)
-    def test_rrf_fusion(self, mock_avail, mock_sem, tmp_path):
+    def test_rrf_fusion(self, mock_avail, mock_embedder, mock_sem, tmp_path):
         conn = self._setup_db(tmp_path)
+        mock_embedder.return_value = MagicMock()
 
         # Mock semantic results — return book 3 (cooking) as top semantic match
         book3 = dict(conn.execute("SELECT * FROM books WHERE id = 3").fetchone())
@@ -259,16 +310,18 @@ class TestHybridSearch:
         book3["distance"] = 0.1
         mock_sem.return_value = [book3]
 
-        results = hybrid_search(conn, "Python", "fake-key", category=None, limit=50)
+        results = hybrid_search(conn, "Python", category=None, limit=50)
         # Should have results from both keyword (Python ML) and semantic (cooking)
         ids = [r["id"] for r in results]
         assert 1 in ids  # Python ML from keyword
         assert 3 in ids  # Cooking from semantic
 
     @patch("bookstuff.web.semantic.semantic_search")
+    @patch("bookstuff.web.semantic.get_embedder")
     @patch("bookstuff.web.semantic.is_semantic_available", return_value=True)
-    def test_hybrid_match_type(self, mock_avail, mock_sem, tmp_path):
+    def test_hybrid_match_type(self, mock_avail, mock_embedder, mock_sem, tmp_path):
         conn = self._setup_db(tmp_path)
+        mock_embedder.return_value = MagicMock()
 
         # Make semantic also return book 1 (same as keyword hit)
         book1 = dict(conn.execute("SELECT * FROM books WHERE id = 1").fetchone())
@@ -277,7 +330,7 @@ class TestHybridSearch:
         book1["distance"] = 0.05
         mock_sem.return_value = [book1]
 
-        results = hybrid_search(conn, "Python", "fake-key", category=None, limit=50)
+        results = hybrid_search(conn, "Python", category=None, limit=50)
         # Book 1 should be "hybrid" since it appeared in both
         book1_result = next(r for r in results if r["id"] == 1)
         assert book1_result["match_type"] == "hybrid"
@@ -315,7 +368,7 @@ class TestEmbeddingStatus:
 class TestSerializeEmbedding:
     def test_roundtrip(self):
         vec = [0.1, 0.2, 0.3, 0.4]
-        data = _serialize_embedding(vec)
+        data = serialize_embedding(vec)
         assert isinstance(data, bytes)
         unpacked = struct.unpack(f"{len(vec)}f", data)
         for a, b in zip(vec, unpacked):
