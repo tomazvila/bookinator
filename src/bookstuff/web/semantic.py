@@ -282,12 +282,13 @@ def init_semantic_db(conn: sqlite3.Connection) -> None:
     need_reset = False
     if row is None:
         # First run with migration tracking — check if old embeddings exist
-        try:
-            conn.execute("SELECT 1 FROM chunk_embeddings LIMIT 0")
-            need_reset = True  # Old table exists without model tracking
+        # Use sqlite_master instead of querying the table (vec0 extension not loaded yet)
+        exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='chunk_embeddings'"
+        ).fetchone()
+        if exists:
+            need_reset = True
             logger.info("Found pre-existing chunk_embeddings without model tracking — resetting")
-        except Exception:
-            pass  # Table doesn't exist yet, nothing to reset
     elif row[0] != _CURRENT_MODEL or row[1] != EMBEDDING_DIMS:
         need_reset = True
         logger.info(
@@ -295,13 +296,14 @@ def init_semantic_db(conn: sqlite3.Connection) -> None:
             row[0], row[1], _CURRENT_MODEL, EMBEDDING_DIMS,
         )
 
+    # Load sqlite-vec early — needed for DROP TABLE on vec0 virtual tables
+    vec_available = _load_sqlite_vec(conn)
+
     if need_reset:
         conn.execute("DELETE FROM book_chunks")
         conn.execute("UPDATE embedding_status SET status = 'pending', file_hash = NULL, chunk_count = 0")
-        try:
+        if vec_available:
             conn.execute("DROP TABLE IF EXISTS chunk_embeddings")
-        except Exception:
-            pass
         conn.execute("DELETE FROM embedding_model")
 
     conn.execute(
@@ -311,7 +313,7 @@ def init_semantic_db(conn: sqlite3.Connection) -> None:
     conn.commit()
 
     # sqlite-vec virtual table — created only if extension is available
-    if _load_sqlite_vec(conn):
+    if vec_available:
         conn.execute(f"""
             CREATE VIRTUAL TABLE IF NOT EXISTS chunk_embeddings USING vec0(
                 chunk_id INTEGER PRIMARY KEY,
