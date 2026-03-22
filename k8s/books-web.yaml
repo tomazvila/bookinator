@@ -50,16 +50,17 @@ spec:
           resources:
             requests:
               memory: "256Mi"
-              cpu: "100m"
+              cpu: "250m"
             limits:
               memory: "4Gi"
-              cpu: "500m"
+              cpu: "2000m"
           livenessProbe:
             httpGet:
               path: /api/health
               port: http
-            initialDelaySeconds: 10
+            initialDelaySeconds: 60
             periodSeconds: 30
+            timeoutSeconds: 5
           readinessProbe:
             httpGet:
               path: /api/health
