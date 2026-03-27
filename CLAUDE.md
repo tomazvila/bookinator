@@ -90,6 +90,38 @@ Books are classified into: `programming`, `computer-science`, `mathematics`, `ph
 - Destination: `/mnt/ssdb/books/<category>/`
 - Existing collections to reorganize: `/mnt/ssdb/AK/`, `/mnt/ssdb/financial knowloedge/`
 
+## Deployment & Debugging
+
+The web UI runs on k3s on the remote server (`nixos` node). Quick reference:
+
+```bash
+# SSH into the server
+ssh lilvilla@ssh.tomazvi.la
+
+# Pod status (books-web deployment in default namespace)
+kubectl get pods -l app=books-web
+kubectl describe pod -l app=books-web   # events, restart count, probe failures, exit codes
+
+# Logs (current + previous crash)
+kubectl logs -l app=books-web --tail=100
+kubectl logs -l app=books-web --previous --tail=100
+
+# Resource usage
+kubectl top pod -l app=books-web
+
+# Deployment & service
+kubectl get deploy books-web -o yaml
+kubectl get svc books-web
+```
+
+Key files:
+- `Dockerfile` — image build (entrypoint: `bookstuff-web`)
+- `k8s/books-web.yaml` — Deployment + Service manifest
+- NixOS config: `/etc/nixos/configuration.nix` on the remote (GitHub runner, cloudflared tunnel, nginx)
+- Cloudflare tunnel config: `/home/lilvilla/.cloudflared/config.yml` on the remote
+
+The image is built locally on the server (`imagePullPolicy: Never`). Cloudflared in k3s routes `books.tomazvi.la` traffic to the service.
+
 ## Design Context
 
 ### Users

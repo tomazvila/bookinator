@@ -12,4 +12,11 @@ EXPOSE 5001
 ENV BOOKS_DIR=/books
 ENV PORT=5001
 
-CMD ["bookstuff-web"]
+CMD ["gunicorn", \
+     "--bind", "0.0.0.0:5001", \
+     "--workers", "1", \
+     "--threads", "4", \
+     "--worker-class", "gthread", \
+     "--timeout", "120", \
+     "--access-logfile", "-", \
+     "bookstuff.web.app:create_app()"]
