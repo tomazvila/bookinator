@@ -52,12 +52,20 @@ The CLI is built with `click` and organized into these modules under `src/bookst
 
 **Data flow**: Scanner -> Filter -> Classifier -> Dedup -> Uploader (with Manifest tracking throughout)
 
-## Key Dependencies (managed in flake.nix)
+## Key Dependencies
 
+Dependencies are declared in **two places** that must stay in sync:
+- `pyproject.toml` — used by `pip install` (Dockerfile, editable installs)
+- `flake.nix` (`allNixPkgs`) — used by `nix build` and the nix docker image
+
+When adding a new dependency, update **both** files.
+
+Core deps:
 - `ebooklib` — EPUB metadata extraction
 - `pymupdf` — PDF metadata/text extraction
 - `click` — CLI framework
 - `anthropic` — Claude API for LLM classification
+- `gunicorn` — production WSGI server (used by `bookstuff-web` entrypoint)
 
 ## Category Taxonomy
 
@@ -115,7 +123,7 @@ kubectl get svc books-web
 ```
 
 Key files:
-- `Dockerfile` — image build (entrypoint: `bookstuff-web`)
+- `Dockerfile` — standalone Docker build (NOT used in production; the deployed image is built by `nix build .#docker` from `flake.nix`)
 - `k8s/books-web.yaml` — Deployment + Service manifest
 - NixOS config: `/etc/nixos/configuration.nix` on the remote (GitHub runner, cloudflared tunnel, nginx)
 - Cloudflare tunnel config: `/home/lilvilla/.cloudflared/config.yml` on the remote
