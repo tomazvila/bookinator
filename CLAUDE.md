@@ -124,11 +124,27 @@ kubectl get svc books-web
 
 Key files:
 - `Dockerfile` — standalone Docker build (NOT used in production; the deployed image is built by `nix build .#docker` from `flake.nix`)
-- `k8s/books-web.yaml` — Deployment + Service manifest
+- `k8s/books-web.yaml` — Web server Deployment + Service manifest
+- `k8s/books-worker.yaml` — Background worker Deployment (reindex + embedding)
 - NixOS config: `/etc/nixos/configuration.nix` on the remote (GitHub runner, cloudflared tunnel, nginx)
 - Cloudflare tunnel config: `/home/lilvilla/.cloudflared/config.yml` on the remote
 
 The image is built locally on the server (`imagePullPolicy: Never`). Cloudflared in k3s routes `books.tomazvi.la` traffic to the service.
+
+### Architecture: web + worker
+
+Two pods share the same image but run different entrypoints:
+- **`books-web`** (`bookstuff-web`) — gunicorn serving the Flask app. No background CPU work.
+- **`books-worker`** (`bookstuff-worker`) — runs reindex + ONNX embedding in a loop. Separated so CPU-heavy inference doesn't block health probes.
+
+Both share the SQLite DB at `/mnt/ssdb/books/.bookstuff.db` via hostPath volume. SQLite WAL mode + `busy_timeout=5000` handles concurrent access.
+
+### Pre-push checklist
+
+Before pushing changes that affect the deployed service:
+1. **SQLite concurrency** — both web and worker write to the same DB. Any schema migration or `init_db` change must handle `database is locked` (WAL + busy_timeout). Test concurrent access if adding new writers.
+2. **Startup time** — `create_app()` runs synchronously before gunicorn accepts connections. Keep it fast (no heavy I/O). The readiness probe starts at 5s; liveness at 30s.
+3. **Probe math** — the CI rollout timeout (300s) must exceed `initialDelaySeconds + (periodSeconds × failureThreshold)` for liveness, or the rollout will always fail before k8s even gives the pod a chance.
 
 ## Design Context
 
