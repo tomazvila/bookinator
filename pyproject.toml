@@ -27,6 +27,7 @@ semantic = [
 [project.scripts]
 bookstuff = "bookstuff.cli:cli"
 bookstuff-web = "bookstuff.web.app:main"
+bookstuff-worker = "bookstuff.web.worker:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

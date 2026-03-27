@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: books-worker
+  labels:
+    app: books-worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: books-worker
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: books-worker
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: nixos
+      containers:
+        - name: books-worker
+          image: books-web:latest
+          imagePullPolicy: Never
+          command: ["bookstuff-worker"]
+          env:
+            - name: BOOKS_DIR
+              value: /books
+            - name: EMBEDDING_MODEL_DIR
+              value: /model
+          volumeMounts:
+            - name: books-volume
+              mountPath: /books
+              readOnly: false
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "2Gi"
+              cpu: "1000m"
+      volumes:
+        - name: books-volume
+          hostPath:
+            path: /mnt/ssdb/books
+            type: Directory

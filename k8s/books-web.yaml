@@ -58,10 +58,9 @@ spec:
             httpGet:
               path: /api/health
               port: http
-            initialDelaySeconds: 90
-            periodSeconds: 30
-            timeoutSeconds: 10
-            failureThreshold: 5
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
           readinessProbe:
             httpGet:
               path: /api/health

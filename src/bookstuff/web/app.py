@@ -8,10 +8,10 @@ from collections import defaultdict
 from flask import Flask, jsonify, render_template, request, send_from_directory, abort
 from werkzeug.utils import secure_filename
 
-from bookstuff.web.index import get_db_path, init_db, reindex, get_categories, start_reindex_thread, EBOOK_EXTENSIONS, parse_filename
+from bookstuff.web.index import get_db_path, init_db, reindex, get_categories, EBOOK_EXTENSIONS, parse_filename
 from bookstuff.web.password import verify_password
 from bookstuff.web.preview import generate_preview
-from bookstuff.web.semantic import hybrid_search, get_embedding_status, is_semantic_available, index_pending_books
+from bookstuff.web.semantic import hybrid_search, get_embedding_status, is_semantic_available
 from bookstuff.web.embeddings import get_embedder
 
 logger = logging.getLogger(__name__)
@@ -52,23 +52,12 @@ def create_app(books_dir: str | None = None, reindex_on_start: bool = True) -> F
     db_path = get_db_path(books_dir)
     conn = init_db(db_path)
 
-    # Initialize local embedding model (logs warning if model files not found)
+    # Initialize local embedding model for search queries (logs warning if not found)
     get_embedder()
 
     if reindex_on_start:
         count = reindex(conn, books_dir)
         logger.info("Initial index: %d books", count)
-        start_reindex_thread(conn, books_dir)
-
-        # Kick off initial semantic indexing in background
-        if get_embedder() is not None:
-            import threading
-            def _initial_semantic_index():
-                try:
-                    index_pending_books(conn, books_dir)
-                except Exception:
-                    logger.exception("Initial semantic indexing failed")
-            threading.Thread(target=_initial_semantic_index, daemon=True).start()
 
     @app.route("/")
     def index():

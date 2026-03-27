@@ -53,5 +53,7 @@ jobs:
       - name: Deploy to k3s
         run: |
           kubectl apply -f k8s/books-web.yaml
+          kubectl apply -f k8s/books-worker.yaml
           kubectl rollout restart deployment/books-web
+          kubectl rollout restart deployment/books-worker
           kubectl rollout status deployment/books-web --timeout=120s

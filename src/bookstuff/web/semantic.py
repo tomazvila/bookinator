@@ -573,8 +573,6 @@ def index_pending_books(
             continue
         if index_book(conn, book_id, book_path, extension):
             indexed += 1
-        # Yield the GIL between books so health check threads can respond
-        time.sleep(0.1)
 
     if indexed:
         logger.info("Indexed %d books in this batch", indexed)

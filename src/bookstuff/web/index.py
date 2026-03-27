@@ -216,12 +216,6 @@ def start_reindex_thread(
             except Exception:
                 logger.exception("Reindex failed")
 
-            try:
-                from bookstuff.web.semantic import index_pending_books
-                index_pending_books(conn, books_dir)
-            except Exception:
-                logger.exception("Semantic indexing failed")
-
     t = threading.Thread(target=_loop, daemon=True)
     t.start()
     return t
