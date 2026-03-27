@@ -77,6 +77,7 @@
           ps.ebooklib
           ps.pymupdf
           ps.flask
+          ps.gunicorn
           ps.argon2-cffi
           ps.requests
           ps.numpy

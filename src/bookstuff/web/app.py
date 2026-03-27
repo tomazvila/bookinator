@@ -205,11 +205,39 @@ def create_app(books_dir: str | None = None, reindex_on_start: bool = True) -> F
 
 
 def main():
+    logging.basicConfig(level=logging.INFO)
     port = int(os.environ.get("PORT", 5001))
-    app = create_app()
-    app.run(host="0.0.0.0", port=port)
+
+    try:
+        from gunicorn.app.base import BaseApplication
+
+        class _StandaloneApplication(BaseApplication):
+            def __init__(self, app_factory, options=None):
+                self.app_factory = app_factory
+                self.options = options or {}
+                super().__init__()
+
+            def load_config(self):
+                for key, value in self.options.items():
+                    self.cfg.set(key.lower(), value)
+
+            def load(self):
+                return self.app_factory()
+
+        options = {
+            "bind": f"0.0.0.0:{port}",
+            "workers": 1,
+            "threads": 4,
+            "worker_class": "gthread",
+            "timeout": 120,
+            "accesslog": "-",
+        }
+        _StandaloneApplication(create_app, options).run()
+    except ImportError:
+        logger.warning("gunicorn not installed, falling back to Flask dev server")
+        app = create_app()
+        app.run(host="0.0.0.0", port=port)
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
     main()
