@@ -21,6 +21,9 @@
     <main>
         {% block content %}{% endblock %}
     </main>
+    <footer class="site-footer">
+        <span>{{ app_version }} ({{ git_commit }})</span>
+    </footer>
     {% block scripts %}{% endblock %}
 </body>
 </html>

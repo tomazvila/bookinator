@@ -99,6 +99,15 @@ main {
     padding: 2rem;
 }
 
+.site-footer {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 1rem 2rem 1.5rem;
+    font-size: 0.7rem;
+    color: var(--fg-gutter);
+    font-family: 'IBM Plex Mono', monospace;
+}
+
 /* Upload panel */
 .upload-panel {
     margin-bottom: 1.5rem;

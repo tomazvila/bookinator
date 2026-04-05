@@ -78,6 +78,17 @@ def create_app(books_dir: str | None = None, reindex_on_start: bool = True) -> F
     # Initialize local embedding model for search queries (logs warning if not found)
     get_embedder()
 
+    # Version info for footer
+    app.config["APP_VERSION"] = "0.1.0"
+    app.config["GIT_COMMIT"] = os.environ.get("GIT_COMMIT", "dev")
+
+    @app.context_processor
+    def inject_version():
+        return {
+            "app_version": app.config["APP_VERSION"],
+            "git_commit": app.config["GIT_COMMIT"],
+        }
+
     @app.route("/")
     def index():
         return render_template("index.html")

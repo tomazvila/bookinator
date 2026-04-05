@@ -110,6 +110,8 @@
           '';
         };
 
+        gitRev = self.shortRev or self.dirtyShortRev or "dev";
+
         dockerImage = pkgs.dockerTools.buildLayeredImage {
           name = "books-web";
           tag = "latest";
@@ -121,6 +123,7 @@
               "PORT=5001"
               "EMBEDDING_MODEL_DIR=/model"
               "SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
+              "GIT_COMMIT=${gitRev}"
             ];
             ExposedPorts = { "5001/tcp" = {}; };
           };
