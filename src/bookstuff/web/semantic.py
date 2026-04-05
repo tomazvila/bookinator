@@ -583,6 +583,9 @@ def index_pending_books(
 # Search
 # ---------------------------------------------------------------------------
 
+SEMANTIC_TIMEOUT = 5  # seconds — abort KNN if it takes longer than this
+
+
 def semantic_search(
     conn: sqlite3.Connection,
     query: str,
@@ -597,45 +600,74 @@ def semantic_search(
     if embedder is None or not is_semantic_available(conn):
         return []
 
+    t0 = time.time()
     query_embedding = embedder.embed_query(query)
     query_bytes = serialize_embedding(query_embedding)
+    t_embed = time.time() - t0
 
-    # Vector search: get top chunks
-    search_limit = limit * 3  # over-fetch since we dedupe by book
-    rows = conn.execute("""
-        SELECT ce.chunk_id, ce.distance,
-               bc.book_id, bc.text, bc.page_number
-        FROM chunk_embeddings ce
-        JOIN book_chunks bc ON bc.id = ce.chunk_id
-        WHERE ce.embedding MATCH ? AND k = ?
-        ORDER BY ce.distance
-    """, (query_bytes, search_limit)).fetchall()
+    # Set a progress handler that aborts the query after SEMANTIC_TIMEOUT.
+    # SQLite calls this every N VM instructions; returning non-zero aborts.
+    deadline = time.monotonic() + SEMANTIC_TIMEOUT
+
+    def _check_deadline():
+        return 1 if time.monotonic() > deadline else 0
+
+    conn.set_progress_handler(_check_deadline, 10000)
+
+    try:
+        # Vector search with book metadata joined (avoids N+1 queries)
+        search_limit = limit * 3  # over-fetch since we dedupe by book
+        t1 = time.time()
+        rows = conn.execute("""
+            SELECT ce.chunk_id, ce.distance,
+                   bc.book_id, bc.text, bc.page_number,
+                   b.filename, b.author, b.title, b.category,
+                   b.extension, b.size_bytes, b.path
+            FROM chunk_embeddings ce
+            JOIN book_chunks bc ON bc.id = ce.chunk_id
+            JOIN books b ON b.id = bc.book_id
+            WHERE ce.embedding MATCH ? AND k = ?
+            ORDER BY ce.distance
+        """, (query_bytes, search_limit)).fetchall()
+        t_knn = time.time() - t1
+    except sqlite3.OperationalError as e:
+        if "interrupted" in str(e).lower():
+            logger.warning("Semantic search aborted after %.1fs timeout", SEMANTIC_TIMEOUT)
+            return []
+        raise
+    finally:
+        conn.set_progress_handler(None, 0)
+
+    logger.info("Semantic search: embed=%.3fs knn=%.3fs (%d results)", t_embed, t_knn, len(rows))
 
     # Deduplicate by book_id (keep best match per book)
     seen_books: dict[int, dict] = {}
     for row in rows:
-        chunk_id, distance, book_id, chunk_text, page_number = row
+        (chunk_id, distance, book_id, chunk_text, page_number,
+         filename, author, title, category_val, extension, size_bytes, path) = row
         if book_id in seen_books:
             continue
 
-        # Get book metadata
-        book_row = conn.execute("SELECT * FROM books WHERE id = ?", (book_id,)).fetchone()
-        if not book_row:
-            continue
-
-        book = dict(book_row)
-
         # Apply category filter
-        if category and book["category"] != category:
+        if category and category_val != category:
             continue
 
         # Truncate match context
         context = chunk_text[:200] + "..." if len(chunk_text) > 200 else chunk_text
 
-        book["match_context"] = context
-        book["match_page"] = page_number
-        book["distance"] = distance
-        seen_books[book_id] = book
+        seen_books[book_id] = {
+            "id": book_id,
+            "filename": filename,
+            "author": author,
+            "title": title,
+            "category": category_val,
+            "extension": extension,
+            "size_bytes": size_bytes,
+            "path": path,
+            "match_context": context,
+            "match_page": page_number,
+            "distance": distance,
+        }
 
         if len(seen_books) >= limit:
             break
@@ -668,15 +700,23 @@ def hybrid_search(
         return results
 
     # Run FTS5 search
+    t0 = time.time()
     fts_results = fts_search(conn, query, category=category, limit=limit * 2, offset=0)
+    t_fts = time.time() - t0
 
     # Run semantic search (local — no API call)
     sem_results = []
+    t_sem = 0.0
     if use_semantic and is_semantic_available(conn) and get_embedder() is not None:
+        t1 = time.time()
         try:
             sem_results = semantic_search(conn, query, category=category, limit=limit * 2)
         except Exception as e:
             logger.warning("Semantic search failed, using keyword only: %s", e)
+        t_sem = time.time() - t1
+
+    logger.info("hybrid_search q=%r: fts=%.3fs(%d) sem=%.3fs(%d)",
+                query, t_fts, len(fts_results), t_sem, len(sem_results))
 
     # If no semantic results, return FTS with metadata
     if not sem_results:
@@ -754,6 +794,11 @@ def get_embedding_status(conn: sqlite3.Connection) -> dict:
     for row in rows:
         status_counts[row[0]] = row[1]
 
+    try:
+        total_chunks = conn.execute("SELECT COUNT(*) FROM book_chunks").fetchone()[0]
+    except Exception:
+        total_chunks = 0
+
     return {
         "total_books": total,
         "indexed": status_counts.get("done", 0),
@@ -761,5 +806,6 @@ def get_embedding_status(conn: sqlite3.Connection) -> dict:
         "processing": status_counts.get("processing", 0),
         "failed": status_counts.get("failed", 0),
         "unsupported": status_counts.get("unsupported", 0),
+        "total_chunks": total_chunks,
         "semantic_available": total > 0,  # will be corrected by caller
     }
