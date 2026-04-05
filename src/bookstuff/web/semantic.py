@@ -313,27 +313,38 @@ def init_semantic_db(conn: sqlite3.Connection) -> None:
             conn.execute("DROP TABLE IF EXISTS book_embeddings")
         conn.execute("DELETE FROM embedding_model")
 
-    conn.execute(
-        "INSERT OR REPLACE INTO embedding_model (id, model_name, dims) VALUES (1, ?, ?)",
-        (_CURRENT_MODEL, EMBEDDING_DIMS),
-    )
-    conn.commit()
+    # Only write if the model row is missing or changed — avoids lock contention
+    # with the worker process which may be doing heavy writes.
+    if row is None or row[0] != _CURRENT_MODEL or row[1] != EMBEDDING_DIMS:
+        conn.execute(
+            "INSERT OR REPLACE INTO embedding_model (id, model_name, dims) VALUES (1, ?, ?)",
+            (_CURRENT_MODEL, EMBEDDING_DIMS),
+        )
+        conn.commit()
 
-    # sqlite-vec virtual tables — created only if extension is available
+    # sqlite-vec virtual tables — created only if extension is available.
+    # Wrapped in try/except: if the worker holds the write lock the tables
+    # likely already exist and reads will still work.
     if vec_available:
-        conn.execute(f"""
-            CREATE VIRTUAL TABLE IF NOT EXISTS chunk_embeddings USING vec0(
-                chunk_id INTEGER PRIMARY KEY,
-                embedding float[{EMBEDDING_DIMS}]
-            )
-        """)
-        conn.execute(f"""
-            CREATE VIRTUAL TABLE IF NOT EXISTS book_embeddings USING vec0(
-                book_id INTEGER PRIMARY KEY,
-                embedding float[{EMBEDDING_DIMS}]
-            )
-        """)
-    conn.commit()
+        try:
+            conn.execute(f"""
+                CREATE VIRTUAL TABLE IF NOT EXISTS chunk_embeddings USING vec0(
+                    chunk_id INTEGER PRIMARY KEY,
+                    embedding float[{EMBEDDING_DIMS}]
+                )
+            """)
+            conn.execute(f"""
+                CREATE VIRTUAL TABLE IF NOT EXISTS book_embeddings USING vec0(
+                    book_id INTEGER PRIMARY KEY,
+                    embedding float[{EMBEDDING_DIMS}]
+                )
+            """)
+            conn.commit()
+        except sqlite3.OperationalError as e:
+            if "locked" in str(e).lower():
+                logger.warning("Could not create vec tables (DB locked) — likely already exist")
+            else:
+                raise
 
 
 def load_sqlite_vec(conn: sqlite3.Connection) -> bool:
@@ -459,7 +470,7 @@ def backfill_book_embeddings(conn: sqlite3.Connection) -> int:
         )
         count += 1
 
-        if count % 500 == 0:
+        if count % 100 == 0:
             conn.commit()
             logger.info("Backfilled %d / %d book embeddings", count, len(rows))
 
