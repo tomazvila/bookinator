@@ -37,7 +37,13 @@
 
 <div class="search-container">
     <input type="text" id="search" placeholder="Search books...  ( / )" autocomplete="off" autofocus>
-    <div id="categories" class="categories"></div>
+    <div class="search-options">
+        <label class="toggle-label" title="Enable semantic/content search (slower but searches inside books)">
+            <input type="checkbox" id="semantic-toggle" checked>
+            <span>Vector search</span>
+        </label>
+        <div id="categories" class="categories"></div>
+    </div>
 </div>
 
 <div id="stats" class="stats"></div>
@@ -91,10 +97,13 @@ async function loadCategories() {
     });
 }
 
+const semanticToggle = document.getElementById('semantic-toggle');
+
 async function doSearch() {
     const q = searchInput.value.trim();
     const params = new URLSearchParams({q, limit: '100'});
     if (activeCategory) params.set('category', activeCategory);
+    if (!semanticToggle.checked) params.set('semantic', '0');
     resultsEl.style.opacity = '0.6';
     const resp = await fetch('/api/search?' + params);
     const data = await resp.json();
@@ -103,6 +112,8 @@ async function doSearch() {
     selectedIndex = -1;
     renderResults(data.results, data.count);
 }
+
+semanticToggle.addEventListener('change', doSearch);
 
 function renderResults(books, count) {
     const filtered = activeCategory || searchInput.value.trim();

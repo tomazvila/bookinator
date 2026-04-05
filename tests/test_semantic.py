@@ -161,7 +161,7 @@ class TestInitSemanticDb:
         """)
         conn.commit()
 
-        with patch("bookstuff.web.semantic._load_sqlite_vec", return_value=False):
+        with patch("bookstuff.web.semantic.load_sqlite_vec", return_value=False):
             init_semantic_db(conn)
 
         tables = {row[0] for row in conn.execute(
@@ -183,7 +183,7 @@ class TestInitSemanticDb:
         """)
         conn.commit()
 
-        with patch("bookstuff.web.semantic._load_sqlite_vec", return_value=False):
+        with patch("bookstuff.web.semantic.load_sqlite_vec", return_value=False):
             init_semantic_db(conn)
             init_semantic_db(conn)  # should not raise
 
@@ -352,7 +352,7 @@ class TestEmbeddingStatus:
                 category TEXT, extension TEXT, size_bytes INTEGER, path TEXT UNIQUE
             )
         """)
-        with patch("bookstuff.web.semantic._load_sqlite_vec", return_value=False):
+        with patch("bookstuff.web.semantic.load_sqlite_vec", return_value=False):
             init_semantic_db(conn)
 
         status = get_embedding_status(conn)

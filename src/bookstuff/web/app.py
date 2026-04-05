@@ -3,6 +3,7 @@
 import logging
 import os
 import sqlite3
+import threading
 import time
 from collections import defaultdict
 
@@ -12,7 +13,7 @@ from werkzeug.utils import secure_filename
 from bookstuff.web.index import get_db_path, init_db, reindex, get_categories, EBOOK_EXTENSIONS, parse_filename
 from bookstuff.web.password import verify_password
 from bookstuff.web.preview import generate_preview
-from bookstuff.web.semantic import hybrid_search, get_embedding_status, is_semantic_available
+from bookstuff.web.semantic import hybrid_search, get_embedding_status, is_semantic_available, load_sqlite_vec
 from bookstuff.web.embeddings import get_embedder
 
 logger = logging.getLogger(__name__)
@@ -51,22 +52,31 @@ def create_app(books_dir: str | None = None, reindex_on_start: bool = True) -> F
     upload_limiter = _RateLimiter()
 
     db_path = get_db_path(books_dir)
-    conn = init_db(db_path)
 
-    # Separate read-only connection for health probes so they never block on
-    # query threads sharing the main connection.
-    health_conn = sqlite3.connect(db_path, check_same_thread=False)
-    health_conn.row_factory = sqlite3.Row
-    health_conn.execute("PRAGMA journal_mode=WAL")
-    health_conn.execute("PRAGMA busy_timeout=2000")
-    health_conn.execute("PRAGMA query_only=ON")
+    # One-time schema initialization
+    init_conn = init_db(db_path)
+    if reindex_on_start:
+        count = reindex(init_conn, books_dir)
+        logger.info("Initial index: %d books", count)
+    init_conn.close()
+
+    # Thread-local storage: each gunicorn thread gets its own SQLite connection.
+    # This avoids the InterfaceError caused by concurrent use of a single conn.
+    _local = threading.local()
+
+    def get_db() -> sqlite3.Connection:
+        conn = getattr(_local, "conn", None)
+        if conn is None:
+            conn = sqlite3.connect(db_path, check_same_thread=False)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA busy_timeout=5000")
+            load_sqlite_vec(conn)
+            _local.conn = conn
+        return conn
 
     # Initialize local embedding model for search queries (logs warning if not found)
     get_embedder()
-
-    if reindex_on_start:
-        count = reindex(conn, books_dir)
-        logger.info("Initial index: %d books", count)
 
     @app.route("/")
     def index():
@@ -78,40 +88,43 @@ def create_app(books_dir: str | None = None, reindex_on_start: bool = True) -> F
         category = request.args.get("category", "").strip() or None
         limit = min(int(request.args.get("limit", 50)), 200)
         offset = int(request.args.get("offset", 0))
+        use_semantic = request.args.get("semantic", "1") != "0"
 
-        results = hybrid_search(conn, q, category=category, limit=limit, offset=offset)
-        mode = "hybrid" if get_embedder() is not None and is_semantic_available(conn) else "keyword"
+        conn = get_db()
+        results = hybrid_search(conn, q, category=category, limit=limit, offset=offset,
+                                use_semantic=use_semantic)
+        mode = "hybrid" if use_semantic and get_embedder() is not None and is_semantic_available(conn) else "keyword"
         return jsonify({"results": results, "count": len(results), "mode": mode})
 
     @app.route("/api/search/status")
     def api_search_status():
+        conn = get_db()
         status = get_embedding_status(conn)
         status["semantic_available"] = is_semantic_available(conn) and get_embedder() is not None
         return jsonify(status)
 
     @app.route("/api/categories")
     def api_categories():
-        cats = get_categories(conn)
-        return jsonify({"categories": cats})
+        return jsonify({"categories": get_categories(get_db())})
 
     @app.route("/api/health")
     def api_health():
         try:
-            count = health_conn.execute("SELECT COUNT(*) FROM books").fetchone()[0]
+            count = get_db().execute("SELECT COUNT(*) FROM books").fetchone()[0]
         except Exception:
             return jsonify({"status": "ok", "books": -1})
         return jsonify({"status": "ok", "books": count})
 
     @app.route("/book/<int:book_id>")
     def book_detail(book_id):
-        row = conn.execute("SELECT * FROM books WHERE id = ?", (book_id,)).fetchone()
+        row = get_db().execute("SELECT * FROM books WHERE id = ?", (book_id,)).fetchone()
         if not row:
             abort(404)
         return render_template("book.html", book=dict(row))
 
     @app.route("/api/preview/<int:book_id>")
     def preview(book_id):
-        row = conn.execute("SELECT * FROM books WHERE id = ?", (book_id,)).fetchone()
+        row = get_db().execute("SELECT * FROM books WHERE id = ?", (book_id,)).fetchone()
         if not row:
             abort(404)
         book = dict(row)
@@ -170,6 +183,7 @@ def create_app(books_dir: str | None = None, reindex_on_start: bool = True) -> F
         logger.info("Uploaded %s to %s", filename, category)
 
         # Add to index immediately
+        conn = get_db()
         author, title = parse_filename(filename)
         rel_path = os.path.join(category, filename)
         size_bytes = os.path.getsize(dest)

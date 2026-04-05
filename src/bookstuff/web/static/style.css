@@ -229,12 +229,65 @@ main {
     color: var(--comment);
 }
 
+/* Search options row */
+.search-options {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-top: 0.75rem;
+}
+
+.toggle-label {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.8rem;
+    color: var(--comment);
+    cursor: pointer;
+    white-space: nowrap;
+    user-select: none;
+    transition: color 0.15s;
+}
+
+.toggle-label:hover {
+    color: var(--fg-dark);
+}
+
+.toggle-label input[type="checkbox"] {
+    appearance: none;
+    width: 14px;
+    height: 14px;
+    border: 1px solid var(--fg-gutter);
+    border-radius: 3px;
+    background: var(--bg-highlight);
+    cursor: pointer;
+    position: relative;
+    flex-shrink: 0;
+}
+
+.toggle-label input[type="checkbox"]:checked {
+    background: var(--magenta);
+    border-color: var(--magenta);
+}
+
+.toggle-label input[type="checkbox"]:checked::after {
+    content: '';
+    position: absolute;
+    left: 3px;
+    top: 1px;
+    width: 5px;
+    height: 8px;
+    border: solid var(--bg-dark);
+    border-width: 0 2px 2px 0;
+    transform: rotate(45deg);
+}
+
 /* Categories */
 .categories {
     display: flex;
     flex-wrap: wrap;
     gap: 0.5rem;
-    margin-top: 1rem;
+    flex: 1;
 }
 
 .chip {

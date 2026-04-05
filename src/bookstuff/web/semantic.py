@@ -302,7 +302,7 @@ def init_semantic_db(conn: sqlite3.Connection) -> None:
         )
 
     # Load sqlite-vec early — needed for DROP TABLE on vec0 virtual tables
-    vec_available = _load_sqlite_vec(conn)
+    vec_available = load_sqlite_vec(conn)
 
     if need_reset:
         conn.execute("DELETE FROM book_chunks")
@@ -328,7 +328,7 @@ def init_semantic_db(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def _load_sqlite_vec(conn: sqlite3.Connection) -> bool:
+def load_sqlite_vec(conn: sqlite3.Connection) -> bool:
     """Try to load the sqlite-vec extension. Returns True on success."""
     try:
         conn.enable_load_extension(True)
@@ -649,10 +649,11 @@ def hybrid_search(
     category: str | None = None,
     limit: int = 50,
     offset: int = 0,
+    use_semantic: bool = True,
 ) -> list[dict]:
     """Combine FTS5 keyword search and semantic vector search using RRF.
 
-    Falls back to FTS5-only if semantic search is unavailable.
+    Falls back to FTS5-only if semantic search is unavailable or disabled.
     """
     from bookstuff.web.index import search as fts_search
 
@@ -671,7 +672,7 @@ def hybrid_search(
 
     # Run semantic search (local — no API call)
     sem_results = []
-    if is_semantic_available(conn) and get_embedder() is not None:
+    if use_semantic and is_semantic_available(conn) and get_embedder() is not None:
         try:
             sem_results = semantic_search(conn, query, category=category, limit=limit * 2)
         except Exception as e:
