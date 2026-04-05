@@ -2,6 +2,7 @@
 
 import logging
 import os
+import sqlite3
 import time
 from collections import defaultdict
 
@@ -52,6 +53,14 @@ def create_app(books_dir: str | None = None, reindex_on_start: bool = True) -> F
     db_path = get_db_path(books_dir)
     conn = init_db(db_path)
 
+    # Separate read-only connection for health probes so they never block on
+    # query threads sharing the main connection.
+    health_conn = sqlite3.connect(db_path, check_same_thread=False)
+    health_conn.row_factory = sqlite3.Row
+    health_conn.execute("PRAGMA journal_mode=WAL")
+    health_conn.execute("PRAGMA busy_timeout=2000")
+    health_conn.execute("PRAGMA query_only=ON")
+
     # Initialize local embedding model for search queries (logs warning if not found)
     get_embedder()
 
@@ -88,7 +97,7 @@ def create_app(books_dir: str | None = None, reindex_on_start: bool = True) -> F
     @app.route("/api/health")
     def api_health():
         try:
-            count = conn.execute("SELECT COUNT(*) FROM books").fetchone()[0]
+            count = health_conn.execute("SELECT COUNT(*) FROM books").fetchone()[0]
         except Exception:
             return jsonify({"status": "ok", "books": -1})
         return jsonify({"status": "ok", "books": count})
