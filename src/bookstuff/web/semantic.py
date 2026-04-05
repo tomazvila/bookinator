@@ -466,7 +466,7 @@ def backfill_book_embeddings(conn: sqlite3.Connection) -> int:
         embeddings = []
         for (cid,) in chunk_ids:
             row = conn.execute(
-                "SELECT embedding FROM chunk_embeddings WHERE rowid = ?", (cid,)
+                "SELECT embedding FROM chunk_embeddings WHERE chunk_id = ?", (cid,)
             ).fetchone()
             if row:
                 embeddings.append(deserialize_embedding(row[0]))
