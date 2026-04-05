@@ -10,7 +10,7 @@ import time
 
 from bookstuff.web.index import get_db_path, init_db, reindex
 from bookstuff.web.embeddings import get_embedder
-from bookstuff.web.semantic import index_pending_books
+from bookstuff.web.semantic import backfill_book_embeddings, index_pending_books
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +27,14 @@ def main():
     get_embedder()
 
     logger.info("Worker started (books_dir=%s)", books_dir)
+
+    # One-time backfill: compute book-level embeddings for existing indexed books
+    try:
+        filled = backfill_book_embeddings(conn)
+        if filled:
+            logger.info("Backfilled %d book-level embeddings", filled)
+    except Exception:
+        logger.exception("Book embedding backfill failed")
 
     while True:
         try:

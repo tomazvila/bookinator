@@ -14,6 +14,7 @@ from ebooklib import epub
 
 from bookstuff.web.embeddings import (
     EMBEDDING_DIMS,
+    deserialize_embedding,
     get_embedder,
     serialize_embedding,
 )
@@ -309,6 +310,7 @@ def init_semantic_db(conn: sqlite3.Connection) -> None:
         conn.execute("UPDATE embedding_status SET status = 'pending', file_hash = NULL, chunk_count = 0")
         if vec_available:
             conn.execute("DROP TABLE IF EXISTS chunk_embeddings")
+            conn.execute("DROP TABLE IF EXISTS book_embeddings")
         conn.execute("DELETE FROM embedding_model")
 
     conn.execute(
@@ -317,11 +319,17 @@ def init_semantic_db(conn: sqlite3.Connection) -> None:
     )
     conn.commit()
 
-    # sqlite-vec virtual table — created only if extension is available
+    # sqlite-vec virtual tables — created only if extension is available
     if vec_available:
         conn.execute(f"""
             CREATE VIRTUAL TABLE IF NOT EXISTS chunk_embeddings USING vec0(
                 chunk_id INTEGER PRIMARY KEY,
+                embedding float[{EMBEDDING_DIMS}]
+            )
+        """)
+        conn.execute(f"""
+            CREATE VIRTUAL TABLE IF NOT EXISTS book_embeddings USING vec0(
+                book_id INTEGER PRIMARY KEY,
                 embedding float[{EMBEDDING_DIMS}]
             )
         """)
@@ -382,6 +390,83 @@ def is_garbled_text(text: str, sample_size: int = 2000) -> bool:
 
     ratio = bad_chars / len(sample)
     return ratio > 0.05
+
+
+# ---------------------------------------------------------------------------
+# Book-level embeddings (mean of chunk embeddings, for fast KNN)
+# ---------------------------------------------------------------------------
+
+def _store_book_embedding(
+    conn: sqlite3.Connection,
+    book_id: int,
+    chunk_embeddings: list[list[float]],
+) -> None:
+    """Compute mean of chunk embeddings, L2-normalize, and store."""
+    import numpy as np
+
+    arr = np.array(chunk_embeddings, dtype=np.float32)
+    mean_emb = arr.mean(axis=0)
+    norm = np.linalg.norm(mean_emb)
+    if norm > 1e-9:
+        mean_emb = mean_emb / norm
+    conn.execute("DELETE FROM book_embeddings WHERE book_id = ?", (book_id,))
+    conn.execute(
+        "INSERT INTO book_embeddings (book_id, embedding) VALUES (?, ?)",
+        (book_id, serialize_embedding(mean_emb.tolist())),
+    )
+
+
+def backfill_book_embeddings(conn: sqlite3.Connection) -> int:
+    """Compute book-level embeddings for books that have chunks but no book embedding.
+
+    Called by the worker on startup. Returns count of books backfilled.
+    """
+    import numpy as np
+
+    # Find books with chunks but missing from book_embeddings
+    rows = conn.execute("""
+        SELECT DISTINCT bc.book_id
+        FROM book_chunks bc
+        WHERE bc.book_id NOT IN (SELECT book_id FROM book_embeddings)
+    """).fetchall()
+
+    if not rows:
+        return 0
+
+    count = 0
+    for (book_id,) in rows:
+        # Fetch all chunk embeddings for this book
+        emb_rows = conn.execute("""
+            SELECT ce.embedding
+            FROM chunk_embeddings ce
+            JOIN book_chunks bc ON bc.id = ce.chunk_id
+            WHERE bc.book_id = ?
+        """, (book_id,)).fetchall()
+
+        if not emb_rows:
+            continue
+
+        embeddings = [deserialize_embedding(row[0]) for row in emb_rows]
+        arr = np.array(embeddings, dtype=np.float32)
+        mean_emb = arr.mean(axis=0)
+        norm = np.linalg.norm(mean_emb)
+        if norm > 1e-9:
+            mean_emb = mean_emb / norm
+
+        conn.execute(
+            "INSERT OR REPLACE INTO book_embeddings (book_id, embedding) VALUES (?, ?)",
+            (book_id, serialize_embedding(mean_emb.tolist())),
+        )
+        count += 1
+
+        if count % 500 == 0:
+            conn.commit()
+            logger.info("Backfilled %d / %d book embeddings", count, len(rows))
+
+    conn.commit()
+    if count:
+        logger.info("Backfilled %d book embeddings", count)
+    return count
 
 
 # ---------------------------------------------------------------------------
@@ -479,6 +564,9 @@ def index_book(
                 "INSERT INTO chunk_embeddings (chunk_id, embedding) VALUES (?, ?)",
                 (chunk_id, serialize_embedding(embedding)),
             )
+
+        # Compute book-level embedding (mean of chunks, L2-normalized)
+        _store_book_embedding(conn, book_id, embeddings)
 
         # Update status
         file_hash = hash_file(book_path)
@@ -586,13 +674,27 @@ def index_pending_books(
 SEMANTIC_TIMEOUT = 5  # seconds — abort KNN if it takes longer than this
 
 
+def _is_book_embeddings_available(conn: sqlite3.Connection) -> bool:
+    """Check if the book_embeddings table exists and has data."""
+    try:
+        count = conn.execute("SELECT COUNT(*) FROM book_embeddings").fetchone()[0]
+        return count > 0
+    except Exception:
+        return False
+
+
 def semantic_search(
     conn: sqlite3.Connection,
     query: str,
     category: str | None = None,
     limit: int = 50,
 ) -> list[dict]:
-    """Search books by semantic similarity using local embeddings."""
+    """Search books by semantic similarity using book-level embeddings.
+
+    Two-phase approach:
+    1. KNN on book_embeddings (~9k vectors) — fast, finds relevant books
+    2. For top books, fetch the best matching chunk for context snippet
+    """
     if not query.strip():
         return []
 
@@ -606,7 +708,6 @@ def semantic_search(
     t_embed = time.time() - t0
 
     # Set a progress handler that aborts the query after SEMANTIC_TIMEOUT.
-    # SQLite calls this every N VM instructions; returning non-zero aborts.
     deadline = time.monotonic() + SEMANTIC_TIMEOUT
 
     def _check_deadline():
@@ -615,20 +716,33 @@ def semantic_search(
     conn.set_progress_handler(_check_deadline, 10000)
 
     try:
-        # Vector search with book metadata joined (avoids N+1 queries)
-        search_limit = limit * 3  # over-fetch since we dedupe by book
+        # Phase 1: KNN on book-level embeddings (fast — ~9k vectors)
+        over_fetch = limit * 3 if category else limit
         t1 = time.time()
-        rows = conn.execute("""
-            SELECT ce.chunk_id, ce.distance,
-                   bc.book_id, bc.text, bc.page_number,
-                   b.filename, b.author, b.title, b.category,
-                   b.extension, b.size_bytes, b.path
-            FROM chunk_embeddings ce
-            JOIN book_chunks bc ON bc.id = ce.chunk_id
-            JOIN books b ON b.id = bc.book_id
-            WHERE ce.embedding MATCH ? AND k = ?
-            ORDER BY ce.distance
-        """, (query_bytes, search_limit)).fetchall()
+
+        if _is_book_embeddings_available(conn):
+            rows = conn.execute("""
+                SELECT be.book_id, be.distance,
+                       b.filename, b.author, b.title, b.category,
+                       b.extension, b.size_bytes, b.path
+                FROM book_embeddings be
+                JOIN books b ON b.id = be.book_id
+                WHERE be.embedding MATCH ? AND k = ?
+                ORDER BY be.distance
+            """, (query_bytes, over_fetch)).fetchall()
+        else:
+            # Fallback to chunk-level KNN if book embeddings not backfilled yet
+            rows = conn.execute("""
+                SELECT DISTINCT bc.book_id, ce.distance,
+                       b.filename, b.author, b.title, b.category,
+                       b.extension, b.size_bytes, b.path
+                FROM chunk_embeddings ce
+                JOIN book_chunks bc ON bc.id = ce.chunk_id
+                JOIN books b ON b.id = bc.book_id
+                WHERE ce.embedding MATCH ? AND k = ?
+                ORDER BY ce.distance
+            """, (query_bytes, over_fetch * 3)).fetchall()
+
         t_knn = time.time() - t1
     except sqlite3.OperationalError as e:
         if "interrupted" in str(e).lower():
@@ -640,22 +754,15 @@ def semantic_search(
 
     logger.info("Semantic search: embed=%.3fs knn=%.3fs (%d results)", t_embed, t_knn, len(rows))
 
-    # Deduplicate by book_id (keep best match per book)
-    seen_books: dict[int, dict] = {}
+    # Phase 2: Build results, apply category filter
+    results = []
     for row in rows:
-        (chunk_id, distance, book_id, chunk_text, page_number,
-         filename, author, title, category_val, extension, size_bytes, path) = row
-        if book_id in seen_books:
-            continue
+        book_id, distance, filename, author, title, category_val, extension, size_bytes, path = row
 
-        # Apply category filter
         if category and category_val != category:
             continue
 
-        # Truncate match context
-        context = chunk_text[:200] + "..." if len(chunk_text) > 200 else chunk_text
-
-        seen_books[book_id] = {
+        results.append({
             "id": book_id,
             "filename": filename,
             "author": author,
@@ -664,15 +771,15 @@ def semantic_search(
             "extension": extension,
             "size_bytes": size_bytes,
             "path": path,
-            "match_context": context,
-            "match_page": page_number,
+            "match_context": None,
+            "match_page": None,
             "distance": distance,
-        }
+        })
 
-        if len(seen_books) >= limit:
+        if len(results) >= limit:
             break
 
-    return list(seen_books.values())
+    return results
 
 
 def hybrid_search(

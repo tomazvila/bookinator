@@ -128,3 +128,9 @@ def get_embedder(model_dir: str | None = None) -> LocalEmbedder | None:
 def serialize_embedding(embedding: list[float]) -> bytes:
     """Serialize embedding to bytes for sqlite-vec."""
     return struct.pack(f"{len(embedding)}f", *embedding)
+
+
+def deserialize_embedding(data: bytes) -> list[float]:
+    """Deserialize embedding bytes from sqlite-vec."""
+    n = len(data) // 4
+    return list(struct.unpack(f"{n}f", data))
