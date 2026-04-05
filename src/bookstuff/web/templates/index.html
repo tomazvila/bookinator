@@ -47,6 +47,7 @@
 </div>
 
 <div id="stats" class="stats"></div>
+<div id="search-error" class="search-error" hidden></div>
 <div id="results" class="results"></div>
 {% endblock %}
 
@@ -56,11 +57,13 @@ const searchInput = document.getElementById('search');
 const categoriesEl = document.getElementById('categories');
 const resultsEl = document.getElementById('results');
 const statsEl = document.getElementById('stats');
+const searchError = document.getElementById('search-error');
 let activeCategory = null;
 let debounceTimer = null;
 let selectedIndex = -1;
 let totalBooks = 0;
 let currentBooks = [];
+let searchController = null; // AbortController for in-flight search
 
 function formatSize(bytes) {
     if (bytes < 1024) return bytes + ' B';
@@ -100,28 +103,59 @@ async function loadCategories() {
 const semanticToggle = document.getElementById('semantic-toggle');
 
 async function doSearch() {
+    // Cancel any in-flight request
+    if (searchController) searchController.abort();
+    searchController = new AbortController();
+
     const q = searchInput.value.trim();
     const params = new URLSearchParams({q, limit: '100'});
     if (activeCategory) params.set('category', activeCategory);
     if (!semanticToggle.checked) params.set('semantic', '0');
-    resultsEl.style.opacity = '0.6';
-    const resp = await fetch('/api/search?' + params);
-    const data = await resp.json();
-    resultsEl.style.opacity = '1';
-    currentBooks = data.results;
-    selectedIndex = -1;
-    renderResults(data.results, data.count);
+
+    searchError.hidden = true;
+    searchInput.classList.add('loading');
+    const t0 = performance.now();
+
+    try {
+        const resp = await fetch('/api/search?' + params, {signal: searchController.signal});
+        const elapsed = Math.round(performance.now() - t0);
+        if (!resp.ok) {
+            let msg = 'Search failed (HTTP ' + resp.status + ')';
+            try { const d = await resp.json(); msg = d.error || msg; } catch {}
+            searchError.textContent = msg;
+            searchError.hidden = false;
+            return;
+        }
+        const data = await resp.json();
+        currentBooks = data.results;
+        selectedIndex = -1;
+        renderResults(data.results, data.count, elapsed, data.mode);
+    } catch (err) {
+        if (err.name === 'AbortError') return; // superseded by newer search
+        searchError.textContent = 'Search failed — check connection';
+        searchError.hidden = false;
+    } finally {
+        searchInput.classList.remove('loading');
+    }
 }
 
 semanticToggle.addEventListener('change', doSearch);
 
-function renderResults(books, count) {
+function renderResults(books, count, elapsedMs, mode) {
     const filtered = activeCategory || searchInput.value.trim();
+    let stat = '';
     if (filtered && totalBooks) {
-        statsEl.textContent = count + ' of ' + totalBooks + (count === 1 ? ' book' : ' books');
+        stat = count + ' of ' + totalBooks + (count === 1 ? ' book' : ' books');
     } else {
-        statsEl.textContent = count + (count === 1 ? ' book' : ' books');
+        stat = count + (count === 1 ? ' book' : ' books');
     }
+    if (elapsedMs != null) {
+        const timePart = elapsedMs < 1000 ? elapsedMs + 'ms' : (elapsedMs / 1000).toFixed(1) + 's';
+        stat += ' <span class="stats-meta">' + timePart;
+        if (mode) stat += ' · ' + mode;
+        stat += '</span>';
+    }
+    statsEl.innerHTML = stat;
 
     if (!books.length) {
         const q = searchInput.value.trim();
@@ -185,7 +219,7 @@ function esc(s) {
 
 searchInput.addEventListener('input', () => {
     clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(doSearch, 200);
+    debounceTimer = setTimeout(doSearch, 300);
 });
 
 document.addEventListener('keydown', e => {
