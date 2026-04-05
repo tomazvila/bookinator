@@ -431,52 +431,69 @@ def backfill_book_embeddings(conn: sqlite3.Connection) -> int:
     """Compute book-level embeddings for books that have chunks but no book embedding.
 
     Called by the worker on startup. Returns count of books backfilled.
+    Uses embedding_status to track which books need backfill (avoids querying
+    vec0 virtual tables for existence checks, which can hang).
     """
     import numpy as np
 
-    # Find books with chunks but missing from book_embeddings
-    rows = conn.execute("""
-        SELECT DISTINCT bc.book_id
-        FROM book_chunks bc
-        WHERE bc.book_id NOT IN (SELECT book_id FROM book_embeddings)
+    # Get all 'done' books — they have chunk embeddings but may lack book embeddings.
+    # We use a flag column to avoid re-processing: once book_embedding is stored,
+    # embedding_status.chunk_count stays > 0. We check all done books each time
+    # (idempotent — DELETE + INSERT in vec0 handles duplicates).
+    all_done = conn.execute("""
+        SELECT es.book_id
+        FROM embedding_status es
+        WHERE es.status = 'done'
     """).fetchall()
 
-    if not rows:
+    if not all_done:
         return 0
 
-    count = 0
-    for (book_id,) in rows:
-        # Fetch all chunk embeddings for this book
-        emb_rows = conn.execute("""
-            SELECT ce.embedding
-            FROM chunk_embeddings ce
-            JOIN book_chunks bc ON bc.id = ce.chunk_id
-            WHERE bc.book_id = ?
-        """, (book_id,)).fetchall()
+    logger.info("Backfilling book embeddings for %d indexed books...", len(all_done))
 
-        if not emb_rows:
+    count = 0
+    for (book_id,) in all_done:
+        # Fetch chunk embeddings via JOIN on book_chunks (regular table) + chunk_embeddings (vec0)
+        # Filter by book_id on book_chunks first (regular table), then join vec0 by rowid.
+        chunk_ids = conn.execute(
+            "SELECT id FROM book_chunks WHERE book_id = ?", (book_id,)
+        ).fetchall()
+
+        if not chunk_ids:
             continue
 
-        embeddings = [deserialize_embedding(row[0]) for row in emb_rows]
+        # Read embeddings one at a time from vec0 (rowid lookup is fast)
+        embeddings = []
+        for (cid,) in chunk_ids:
+            row = conn.execute(
+                "SELECT embedding FROM chunk_embeddings WHERE rowid = ?", (cid,)
+            ).fetchone()
+            if row:
+                embeddings.append(deserialize_embedding(row[0]))
+
+        if not embeddings:
+            continue
+
         arr = np.array(embeddings, dtype=np.float32)
         mean_emb = arr.mean(axis=0)
         norm = np.linalg.norm(mean_emb)
         if norm > 1e-9:
             mean_emb = mean_emb / norm
 
+        conn.execute("DELETE FROM book_embeddings WHERE book_id = ?", (book_id,))
         conn.execute(
-            "INSERT OR REPLACE INTO book_embeddings (book_id, embedding) VALUES (?, ?)",
+            "INSERT INTO book_embeddings (book_id, embedding) VALUES (?, ?)",
             (book_id, serialize_embedding(mean_emb.tolist())),
         )
         count += 1
 
         if count % 100 == 0:
             conn.commit()
-            logger.info("Backfilled %d / %d book embeddings", count, len(rows))
+            logger.info("Backfilled %d / %d book embeddings", count, len(all_done))
 
     conn.commit()
     if count:
-        logger.info("Backfilled %d book embeddings", count)
+        logger.info("Backfilled %d book embeddings total", count)
     return count
 
 
